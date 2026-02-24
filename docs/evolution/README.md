@@ -1,69 +1,57 @@
-# Evolution History
+# Development Evolution (LLM-Oriented)
 
-This directory is the project's chronological engineering memory.
-Its purpose is to help both humans and LLM agents quickly answer:
-- What changed?
-- Why was it changed?
-- What alternatives were considered?
-- What constraints drove the final decision?
-- What was the impact and verification evidence?
+This directory is **not** a mirror of git commit history.
 
-## File Naming and Ordering
+Its purpose is to capture durable engineering knowledge that commit logs do not explain well:
+- repository layout rationale
+- architectural boundaries and invariants
+- recurring design decisions and trade-offs
+- common mistakes and how to avoid them
+- accepted development patterns for future work
 
-Use this filename format for every entry:
+Think of this directory as the project's "engineering memory layer" that complements commits/PRs.
+
+## Relationship to Commit History
+
+- Commit history answers: **when** and **what file changed**.
+- Evolution history answers: **why this structure exists**, **what constraints matter**, **how to change safely**.
+
+Do not write entries as commit summaries.
+Use commits only as optional references when they clarify context.
+
+## Numbering and Naming
+
+Use this filename format:
 
 `NNNN-YYYY-MM-DD-short-kebab-title.md`
 
 Rules:
-- `NNNN` is a 4-digit, strictly increasing sequence.
-- Sequence order must match event chronology.
-- Never reuse a sequence number.
-- If multiple events happen on the same date, keep incrementing `NNNN`.
+- `NNNN` is strictly increasing.
+- Keep chronological order.
+- One entry should describe one coherent architectural or process topic.
 
-Examples:
-- `0006-2026-03-02-input-method-refactor.md`
-- `0007-2026-03-05-shell-startup-optimization.md`
+## What Must Be Captured in New Entries
 
-## Required Structure for Each Entry
+For every new feature, architecture change, or process shift, add one new entry that includes:
+1. the problem model and constraints
+2. the chosen design and rejected alternatives
+3. the safe-change playbook (what to touch, what not to break)
+4. anti-patterns and known failure modes
+5. verification strategy and rollout notes
 
-Each entry should follow this order:
+## LLM-Focused Writing Rules
 
-1. `Metadata`
-2. `Summary`
-3. `Context and Problem`
-4. `Goals and Non-Goals`
-5. `Decision`
-6. `Alternatives Considered`
-7. `Implementation Details`
-8. `Impact`
-9. `Verification`
-10. `Risks and Follow-ups`
-11. `Traceability`
+- Prefer stable concepts over transient commit details.
+- Explicitly state invariants with "must" / "must not" language.
+- Include "Do / Avoid" sections.
+- Include cross-file pointers so an LLM can navigate quickly.
+- Include "Typical mistakes" and "Recovery steps".
 
-## When a New Entry Is Mandatory
+## Authoring Checklist
 
-Create a new entry for any of these:
-- New feature delivery
-- API or behavior change
-- Architecture/module boundary change
-- CI/CD or release process change
-- Branch protection/governance change
-- Any tag or GitHub Release publication
-- Incident-driven fix or rollback
-
-## LLM-Friendly Writing Guidelines
-
-- Prefer short, declarative sentences.
-- Explicitly state causal reasoning ("because X, we chose Y").
-- Separate facts from assumptions.
-- Include concrete identifiers (commit SHA, PR number, run ID, tag).
-- List rejected alternatives with reasons.
-- Describe user-visible impact and developer workflow impact separately.
-
-## Operating Rule Going Forward
-
-For every new feature or infrastructure change:
-1. Add one new evolution document in this directory.
-2. Link it in `INDEX.md`.
-3. Include traceability to commits, PRs, runs, and releases.
+Before finalizing an entry, confirm:
+- It teaches a future contributor how to reason about the system.
+- It helps avoid repeating a known mistake.
+- It remains useful even if commit hashes are unavailable.
+- It links to related architecture docs where needed.
 

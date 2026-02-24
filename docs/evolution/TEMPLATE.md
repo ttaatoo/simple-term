@@ -4,80 +4,65 @@
 
 - Date:
 - Sequence:
-- Authors:
-- Status: `accepted` | `superseded` | `rolled_back`
-- Scope: `app` | `core` | `ci` | `release` | `governance` | `docs`
+- Status: `active` | `superseded`
+- Scope: `architecture` | `runtime` | `testing` | `release` | `governance` | `workflow`
 
-## Summary
+## Why This Entry Exists
 
-- One-paragraph summary of the change and why it exists.
+- What persistent project knowledge is being recorded?
+- Why is this not obvious from commit history?
 
-## Context and Problem
+## System Context
 
-- What was happening before this change?
-- What specific problem or risk required action?
-- What hard constraints existed (time, platform, policy, compatibility)?
+- Relevant directories/modules:
+- Upstream constraints (platform, library, policy):
+- Invariants already in force:
 
-## Goals and Non-Goals
+## Decision and Rationale
 
-Goals:
-- 
-
-Non-Goals:
-- 
-
-## Decision
-
-- What was decided.
-- Why this option was selected.
-- Key trade-offs accepted.
+- Decision:
+- Why this path was selected:
+- Trade-offs accepted:
 
 ## Alternatives Considered
 
-1. Option A:
+1. Option A
 - Pros:
 - Cons:
-- Reason rejected/accepted:
+- Why not chosen:
 
-2. Option B:
+2. Option B
 - Pros:
 - Cons:
-- Reason rejected/accepted:
+- Why not chosen:
 
-## Implementation Details
+## Safe Change Playbook
 
-- Files changed:
-- Key config/code points:
-- Any migration or rollout steps:
+When modifying this area, follow these steps:
+1. 
+2. 
+3. 
 
-## Impact
+## Do / Avoid
 
-Technical impact:
+Do:
 - 
 
-Product/user impact:
+Avoid:
 - 
 
-Operational impact:
+## Typical Mistakes
+
 - 
 
-## Verification
+## Verification Strategy
 
-- Commands run:
-- CI/workflow evidence:
-- Release evidence (if applicable):
+- Required automated checks:
+- Recommended manual checks:
+- Signals of regression:
 
-## Risks and Follow-ups
+## Related Artifacts
 
-- Remaining risks:
-- Recommended next actions:
-
-## Traceability
-
-- Commits:
-- PRs:
-- Tags:
-- Releases:
-- Workflow runs:
 - Related docs:
+- Optional references (PRs/commits/releases):
 

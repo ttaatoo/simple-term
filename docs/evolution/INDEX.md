@@ -1,31 +1,52 @@
-# Evolution Index
+# Evolution Index (Knowledge Map)
 
-This index is the canonical chronological map of project evolution records.
+This index is organized by **engineering knowledge topics**, not by commit chronology.
 
-## Entries
+## 0001 Repository Layout and Dependency Boundaries
 
-1. `0001-2026-02-24-release-foundation`
-- Focus: Release automation baseline (SemVer + GitHub Release workflow)
-- Scope: `release`, `ci`, `docs`
-- Primary links: `release.yml`, `release-strategy.md`
+File: `0001-2026-02-24-repository-layout-and-boundaries.md`
 
-2. `0002-2026-02-24-ci-baseline`
-- Focus: CI gate standardization for formatting, compilation, linting, tests
-- Scope: `ci`, `governance`
-- Primary links: `ci.yml`, required status check naming
+Covers:
+- why the workspace is split into `apps/simple-term` and `crates/simple-term`
+- dependency direction rules
+- where new code should live
+- common layering mistakes
 
-3. `0003-2026-02-24-workspace-bootstrap`
-- Focus: Rust workspace bootstrap (`apps/simple-term`, `crates/simple-term`)
-- Scope: `app`, `core`, `ci`
-- Primary links: PR #1, workspace manifests
+## 0002 Runtime Model and Core Invariants
 
-4. `0004-2026-02-24-release-policy-adjustments`
-- Focus: macOS-only release policy and branch protection tuning
-- Scope: `release`, `governance`
-- Primary links: release workflow update, branch protection rules
+File: `0002-2026-02-24-runtime-model-and-invariants.md`
 
-5. `0005-2026-02-24-v0.1.0-first-release`
-- Focus: first public release published and verified
-- Scope: `release`
-- Primary links: `v0.1.0` assets and run IDs
+Covers:
+- event/data flow from UI to PTY and back
+- lock/snapshot rendering constraints
+- input/scroll behavior guarantees
+- backpressure and event reliability rules
+
+## 0003 Feature Development Workflow and Test Strategy
+
+File: `0003-2026-02-24-feature-workflow-and-test-strategy.md`
+
+Covers:
+- recommended flow for adding features safely
+- test placement and verification expectations
+- high-risk change areas and required safeguards
+
+## 0004 Release and Governance Operating Model
+
+File: `0004-2026-02-24-release-and-governance-model.md`
+
+Covers:
+- SemVer and release execution model
+- macOS-only artifact policy
+- branch protection intent and admin bypass policy
+- operational failure modes during release
+
+## 0005 Known Pitfalls and Recovery Playbooks
+
+File: `0005-2026-02-24-known-pitfalls-and-recovery.md`
+
+Covers:
+- repeated mistakes observed during bootstrap
+- how to detect and recover quickly
+- preventative guardrails for future contributors/LLMs
 
