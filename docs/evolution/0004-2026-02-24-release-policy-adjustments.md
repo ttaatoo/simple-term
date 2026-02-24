@@ -1,43 +1,86 @@
 # 0004-2026-02-24-release-policy-adjustments
 
-## 1. 背景
+## Metadata
 
-- 需要完成首发版本，并把发布产物范围收敛到仅 macOS 平台。
-- 同时希望在保留规则约束的前提下，管理员在紧急场景可绕过规则。
+- Date: 2026-02-24
+- Sequence: 0004
+- Authors: taoyi
+- Status: accepted
+- Scope: release, governance
 
-## 2. 变更内容
+## Summary
 
-- 发布工作流调整为仅构建 `macos-latest`：
-  - 移除 Linux/Windows 构建与打包步骤
-- 分支保护策略调整：
-  - `main` 与 `release/*` 设为 `isAdminEnforced=false`（管理员可绕过）
-  - 保留：
-    - 必需状态检查
-    - 线性历史
-    - 禁止强推/删除
-    - 审批要求（1 个 approval）
+Release policy and branch governance were adjusted to match current product scope (macOS-only distribution) while preserving strict default checks.
 
-## 3. 关键决策与原因
+## Context and Problem
 
-- 当前产品只支持 macOS，先聚焦单平台发布，减少构建成本和发布噪音。
-- 管理员可绕过用于应急，不代表日常绕过；常规流程仍走 PR + 检查。
+The initial release workflow built multiple platforms, but the product requirement was macOS-only support. Simultaneously, branch policy needed strict checks with an emergency administrator bypass path.
 
-## 4. 影响范围
+## Goals and Non-Goals
 
-- 影响发布资产形态与仓库治理策略，不影响运行时逻辑。
+Goals:
+- Restrict release artifacts to macOS.
+- Keep strict branch protections and required checks.
+- Allow admin bypass for urgent incidents.
 
-## 5. 验证与结果
+Non-Goals:
+- Reintroduce Linux/Windows distribution.
+- Relax required status checks for normal flow.
 
-- 新发布 workflow 成功完成。
-- 旧的多平台发布 run 已取消，避免产生不符合策略的产物。
+## Decision
 
-## 6. 关联记录
+1. Release workflow changed to `macos-latest` only.
+2. Branch protection configured with:
+- required checks retained
+- review requirements retained
+- force push/deletion disallowed
+- `isAdminEnforced=false` to permit admin bypass when needed
 
-- Commit: `142f9ad7148453fd18609b70ab0b3fab1be9a37d`
-- PR: `#1`（workspace 合并，推动后续发布）
-- Tag: `v0.1.0`
-- Release: `simple-term v0.1.0`
-- Workflow Run:
-  - `22335167543`（cancelled，旧多平台配置）
-  - `22335259583`（success，macOS-only）
+## Alternatives Considered
+
+1. Keep multi-platform release and ignore unsupported assets
+- Pros: future coverage
+- Cons: wasted build time and user confusion
+- Decision: rejected
+
+2. Remove strict checks entirely for speed
+- Pros: faster merges
+- Cons: quality and governance regression
+- Decision: rejected
+
+## Implementation Details
+
+- Updated: `.github/workflows/release.yml` to macOS-only build and packaging.
+- Updated branch protection rules for `main` and `release/*`.
+- Cancelled outdated multi-platform run to prevent invalid release artifacts.
+
+## Impact
+
+Technical impact:
+- Reduced release pipeline complexity and runtime.
+
+Product/user impact:
+- Release assets now match supported platform scope.
+
+Operational impact:
+- Governance is strict by default, with explicit emergency override path.
+
+## Verification
+
+- Old release run cancelled: `22335167543`.
+- New release run succeeded (macOS-only): `22335259583`.
+
+## Risks and Follow-ups
+
+- Risk: admin bypass can be overused if process discipline is weak.
+- Follow-up: document criteria for using bypass and require post-incident notes.
+
+## Traceability
+
+- Commits: `142f9ad7148453fd18609b70ab0b3fab1be9a37d`
+- PRs: `#1` (related bootstrap context)
+- Tags: `v0.1.0`
+- Releases: `simple-term v0.1.0`
+- Workflow runs: `22335167543` (cancelled), `22335259583` (success)
+- Related docs: `docs/release-strategy.md`
 

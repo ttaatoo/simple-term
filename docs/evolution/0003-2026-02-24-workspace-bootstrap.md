@@ -1,37 +1,90 @@
 # 0003-2026-02-24-workspace-bootstrap
 
-## 1. 背景
+## Metadata
 
-- 需要让仓库具备可构建、可测试的 Rust workspace 主体内容，支撑 CI 与发布。
+- Date: 2026-02-24
+- Sequence: 0003
+- Authors: ytao6122
+- Status: accepted
+- Scope: app, core, ci
 
-## 2. 变更内容
+## Summary
 
-- 引入 workspace 根配置：
+The repository was bootstrapped into a functional Rust workspace with separate app and core crates, enabling full CI validation and release packaging.
+
+## Context and Problem
+
+Release/CI infrastructure existed, but mainline code required a canonical workspace layout and concrete crate content to build and test reliably.
+
+## Goals and Non-Goals
+
+Goals:
+- Establish workspace root manifests.
+- Add app crate and reusable core crate.
+- Make CI checks pass with real code and tests.
+
+Non-Goals:
+- Complete all product features.
+- Finalize long-term API stability.
+
+## Decision
+
+Adopt two-crate layout:
+- `apps/simple-term`: binary entrypoint and app integration
+- `crates/simple-term`: reusable terminal core logic
+
+This separation improves testability and future extensibility while keeping release packaging straightforward.
+
+## Alternatives Considered
+
+1. Single crate only
+- Pros: less structure upfront
+- Cons: weaker separation of concerns and reuse boundaries
+- Decision: rejected
+
+2. Multiple app crates from day one
+- Pros: future-ready for many frontends
+- Cons: unnecessary complexity at bootstrap stage
+- Decision: rejected for now
+
+## Implementation Details
+
+- Added workspace manifests:
   - `Cargo.toml`
   - `Cargo.lock`
-- 引入应用层 crate：`apps/simple-term`
-- 引入核心库 crate：`crates/simple-term`
-- 通过 PR 合并到 `main`。
+- Added application crate:
+  - `apps/simple-term`
+- Added core crate:
+  - `crates/simple-term`
+- Merged via PR to protected `main`.
 
-## 3. 关键决策与原因
+## Impact
 
-- 采用 `apps/simple-term` + `crates/simple-term` 结构，分离应用入口与核心逻辑，提升测试与扩展性。
+Technical impact:
+- Project became buildable/testable end-to-end.
 
-## 4. 影响范围
+Product/user impact:
+- Foundation for runnable desktop app binary.
 
-- 新增项目核心代码与测试体系。
-- 触发主干 CI 并成为后续发布基础。
+Operational impact:
+- CI and release now evaluate actual deliverable code.
 
-## 5. 验证与结果
+## Verification
 
-- 本地验证通过：fmt/check/clippy/test。
-- PR 检查通过后合并。
+- Local verification passed: fmt/check/clippy/test.
+- PR check passed before merge.
 
-## 6. 关联记录
+## Risks and Follow-ups
 
-- Commit: `f0e0b6a46ae30d4b3c3b8edfe017d17627ba1c28`
-- PR: `#1`
-- Tag: N/A
-- Release: N/A
-- Workflow Run: PR CI run `22334624523`（success）
+- Risk: module boundaries may require future refinement as features grow.
+- Follow-up: keep architecture invariants updated in docs.
+
+## Traceability
+
+- Commits: `f0e0b6a46ae30d4b3c3b8edfe017d17627ba1c28`
+- PRs: `#1`
+- Tags: N/A
+- Releases: N/A
+- Workflow runs: `22334624523` (PR CI success)
+- Related docs: `docs/architecture-invariants.md`
 

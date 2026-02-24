@@ -1,30 +1,83 @@
 # NNNN-YYYY-MM-DD-title
 
-## 1. 背景
+## Metadata
 
+- Date:
+- Sequence:
+- Authors:
+- Status: `accepted` | `superseded` | `rolled_back`
+- Scope: `app` | `core` | `ci` | `release` | `governance` | `docs`
+
+## Summary
+
+- One-paragraph summary of the change and why it exists.
+
+## Context and Problem
+
+- What was happening before this change?
+- What specific problem or risk required action?
+- What hard constraints existed (time, platform, policy, compatibility)?
+
+## Goals and Non-Goals
+
+Goals:
 - 
 
-## 2. 变更内容
-
+Non-Goals:
 - 
 
-## 3. 关键决策与原因
+## Decision
 
+- What was decided.
+- Why this option was selected.
+- Key trade-offs accepted.
+
+## Alternatives Considered
+
+1. Option A:
+- Pros:
+- Cons:
+- Reason rejected/accepted:
+
+2. Option B:
+- Pros:
+- Cons:
+- Reason rejected/accepted:
+
+## Implementation Details
+
+- Files changed:
+- Key config/code points:
+- Any migration or rollout steps:
+
+## Impact
+
+Technical impact:
 - 
 
-## 4. 影响范围
-
+Product/user impact:
 - 
 
-## 5. 验证与结果
-
+Operational impact:
 - 
 
-## 6. 关联记录
+## Verification
 
-- Commit:
-- PR:
-- Tag:
-- Release:
-- Workflow Run:
+- Commands run:
+- CI/workflow evidence:
+- Release evidence (if applicable):
+
+## Risks and Follow-ups
+
+- Remaining risks:
+- Recommended next actions:
+
+## Traceability
+
+- Commits:
+- PRs:
+- Tags:
+- Releases:
+- Workflow runs:
+- Related docs:
 

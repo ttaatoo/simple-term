@@ -1,37 +1,69 @@
 # Evolution History
 
-本目录用于记录项目的“演进历史、设计决策、版本发布与变更原因”，目标是让人和 LLM 都能快速理解项目为何这样演化。
+This directory is the project's chronological engineering memory.
+Its purpose is to help both humans and LLM agents quickly answer:
+- What changed?
+- Why was it changed?
+- What alternatives were considered?
+- What constraints drove the final decision?
+- What was the impact and verification evidence?
 
-## 编号与命名规则
+## File Naming and Ordering
 
-- 历史文档统一命名为：`NNNN-YYYY-MM-DD-<slug>.md`
-- `NNNN` 为 4 位递增编号，按时间先后顺序新增（不可复用）。
-- 同一天可有多条记录，继续递增编号。
+Use this filename format for every entry:
 
-示例：
-- `0005-2026-02-24-macos-only-release.md`
+`NNNN-YYYY-MM-DD-short-kebab-title.md`
+
+Rules:
+- `NNNN` is a 4-digit, strictly increasing sequence.
+- Sequence order must match event chronology.
+- Never reuse a sequence number.
+- If multiple events happen on the same date, keep incrementing `NNNN`.
+
+Examples:
 - `0006-2026-03-02-input-method-refactor.md`
+- `0007-2026-03-05-shell-startup-optimization.md`
 
-## 何时必须新增一条演进记录
+## Required Structure for Each Entry
 
-- 新功能开发（feature）
-- 架构/模块边界调整
-- 行为变更或兼容性变更
-- 发布流程、CI/CD、分支治理策略变更
-- 任意版本发布（tag / release）
+Each entry should follow this order:
 
-## 每条记录建议包含
+1. `Metadata`
+2. `Summary`
+3. `Context and Problem`
+4. `Goals and Non-Goals`
+5. `Decision`
+6. `Alternatives Considered`
+7. `Implementation Details`
+8. `Impact`
+9. `Verification`
+10. `Risks and Follow-ups`
+11. `Traceability`
 
-- 背景与问题（为什么改）
-- 变更内容（改了什么）
-- 关键决策与取舍（为什么这么改）
-- 影响范围与兼容性
-- 验证方式（CI/测试/人工验证）
-- 关联信息（commit、PR、tag、release、workflow run）
+## When a New Entry Is Mandatory
 
-## 维护约定（从现在开始）
+Create a new entry for any of these:
+- New feature delivery
+- API or behavior change
+- Architecture/module boundary change
+- CI/CD or release process change
+- Branch protection/governance change
+- Any tag or GitHub Release publication
+- Incident-driven fix or rollback
 
-- 每次开发新功能时，必须在实现完成前后新增一条演进文档。
-- 先写“背景/决策”，再写“实现结果”，避免只记结论不记原因。
-- 如果一次改动跨多个 PR，可在同一编号文档内按时间追加小节。
+## LLM-Friendly Writing Guidelines
+
+- Prefer short, declarative sentences.
+- Explicitly state causal reasoning ("because X, we chose Y").
+- Separate facts from assumptions.
+- Include concrete identifiers (commit SHA, PR number, run ID, tag).
+- List rejected alternatives with reasons.
+- Describe user-visible impact and developer workflow impact separately.
+
+## Operating Rule Going Forward
+
+For every new feature or infrastructure change:
+1. Add one new evolution document in this directory.
+2. Link it in `INDEX.md`.
+3. Include traceability to commits, PRs, runs, and releases.
 
