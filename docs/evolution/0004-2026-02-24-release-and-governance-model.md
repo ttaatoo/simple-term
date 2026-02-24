@@ -92,6 +92,5 @@ For governance changes:
 
 ## Related Artifacts
 
-- Related docs: `docs/release-strategy.md`
+- Related docs: `docs/evolution/README.md`, `docs/evolution/0005-2026-02-24-known-pitfalls-and-recovery.md`
 - Optional references: GitHub branch protection and releases pages
-

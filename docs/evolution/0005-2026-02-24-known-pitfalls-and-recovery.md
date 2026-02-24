@@ -97,6 +97,5 @@ After any recovery action:
 
 ## Related Artifacts
 
-- Related docs: `docs/troubleshooting.md`, `docs/release-strategy.md`
+- Related docs: `docs/troubleshooting.md`, `docs/evolution/0004-2026-02-24-release-and-governance-model.md`
 - Optional references: GitHub Actions run history and branch protection settings
-
