@@ -1,0 +1,34 @@
+[package]
+name = "simple-term-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "simple-term"
+path = "src/main.rs"
+
+[dependencies]
+# GPUI
+gpui.workspace = true
+
+# Terminal core
+simple-term = { path = "../../crates/simple-term" }
+
+# Alacritty (needed for types in view)
+alacritty_terminal.workspace = true
+
+# App dependencies
+anyhow.workspace = true
+directories.workspace = true
+log.workspace = true
+env_logger.workspace = true
+smol.workspace = true
+parking_lot.workspace = true
+dirs.workspace = true
+url.workspace = true
+
+# Pin core-text (macOS) to fix zed-font-kit build
+[target.'cfg(target_os = "macos")'.dependencies]
+core-text.workspace = true

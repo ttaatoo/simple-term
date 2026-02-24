@@ -1,0 +1,47 @@
+[workspace]
+members = ["apps/simple-term", "crates/simple-term"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Zed Terminal Team"]
+license = "MIT"
+
+[workspace.dependencies]
+# GPUI - Zed's UI framework
+gpui = { version = "0.2.1" }
+
+# Alacritty terminal - upstream
+alacritty_terminal = "0.25"
+
+# Pin core-text to 21.0.0 to avoid core-graphics 0.24/0.25 conflict with zed-font-kit
+core-text = "=21.0.0"
+
+# Common dependencies
+anyhow = "1"
+rustc-hash = "2.1"
+futures = "0.3"
+itertools = "0.13"
+libc = "0.2"
+log = { version = "0.4", features = ["std"] }
+env_logger = "0.11"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+url = "2"
+urlencoding = "2"
+parking_lot = "0.12"
+sysinfo = "0.31"
+directories = "5"
+polling = "3"
+
+dirs = "6"
+
+# Async runtime
+smol = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
