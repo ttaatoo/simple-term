@@ -50,7 +50,7 @@ cargo check --workspace
 cargo run -p simple-term-app
 ```
 
-## Project layout (active vs legacy)
+## Project layout
 
 Active workspace members are defined in root `Cargo.toml`:
 
@@ -58,8 +58,6 @@ Active workspace members are defined in root `Cargo.toml`:
 apps/simple-term
 crates/simple-term
 ```
-
-You may also see `apps/zed-terminal` and `crates/zed-terminal` in the repository. These are **legacy snapshots** and are not workspace members for current builds.
 
 ## Configuration
 

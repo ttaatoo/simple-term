@@ -50,3 +50,11 @@ Covers:
 - how to detect and recover quickly
 - preventative guardrails for future contributors/LLMs
 
+## 0006 Legacy Path Cleanup
+
+File: `0006-2026-02-24-legacy-path-cleanup.md`
+
+Covers:
+- removal of stale `zed-terminal` directory trees
+- repository hygiene rules for active workspace-only sources
+- how to prevent path ambiguity during future development

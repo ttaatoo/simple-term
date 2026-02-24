@@ -22,6 +22,7 @@ Boundary invariants:
 - Core crate must not depend on app crate.
 - App crate may depend on core crate.
 - UI event wiring lives in app crate; protocol/terminal behavior lives in core crate.
+- Repository should keep only active workspace paths for this product line (`simple-term`) to avoid contributor/LLM confusion.
 
 ## Decision and Rationale
 
@@ -74,6 +75,7 @@ Avoid:
 - Implementing input translation in `terminal_view.rs` instead of mappings modules.
 - Making core behavior depend on GPUI-specific concepts.
 - Adding cross-crate shortcuts that bypass clean ownership.
+- Keeping stale parallel directory trees that are not workspace members.
 
 ## Verification Strategy
 
@@ -94,4 +96,3 @@ Regression signals:
 
 - Related docs: `docs/architecture-invariants.md`, `AGENTS.md`
 - Optional references: workspace bootstrap PR/commit history
-
