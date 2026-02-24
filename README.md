@@ -16,6 +16,7 @@ A standalone desktop terminal built with Rust, [GPUI](https://github.com/zed-ind
 ## Current platform support
 
 - Official release artifacts: **macOS only** (currently `macos-arm64`)
+- Published formats: `.dmg`, `.tar.gz`, and `SHA256SUMS.txt`
 - CI verification: runs on macOS
 - Linux/Windows source builds are not part of the current release contract
 
@@ -24,16 +25,13 @@ A standalone desktop terminal built with Rust, [GPUI](https://github.com/zed-ind
 ### Install from GitHub Releases
 
 1. Download the latest release asset from [Releases](https://github.com/ttaatoo/simple-term/releases).
-2. Extract the archive.
-3. Run the `simple-term` binary.
+2. Preferred: open the `.dmg` and drag `SimpleTerm.app` to `Applications`.
+3. Alternative: extract the `.tar.gz` and run the `simple-term` binary.
 
 Example:
 
 ```bash
-curl -L -o simple-term.tar.gz \
-  https://github.com/ttaatoo/simple-term/releases/download/v0.1.0/simple-term-v0.1.0-macos-arm64.tar.gz
-tar -xzf simple-term.tar.gz
-./simple-term
+open https://github.com/ttaatoo/simple-term/releases/latest
 ```
 
 ### Build and run from source
@@ -127,7 +125,7 @@ Manual release path:
 
 1. Update workspace version.
 2. Run GitHub Actions `Release` workflow with `version` and `ref`.
-3. Verify generated assets and `SHA256SUMS.txt`.
+3. Verify generated assets (`.dmg`, `.tar.gz`) and `SHA256SUMS.txt`.
 
 ## Troubleshooting
 

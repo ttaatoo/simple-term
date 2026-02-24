@@ -58,3 +58,12 @@ Covers:
 - removal of stale `zed-terminal` directory trees
 - repository hygiene rules for active workspace-only sources
 - how to prevent path ambiguity during future development
+
+## 0007 macOS DMG Release Packaging
+
+File: `0007-2026-02-24-macos-dmg-release-packaging.md`
+
+Covers:
+- adding `.dmg` packaging in release workflow
+- app bundle assembly strategy for unsigned distribution
+- verification expectations for multi-asset macOS releases

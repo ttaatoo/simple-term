@@ -16,7 +16,7 @@ Release/governance decisions are easy to forget because they live partly in work
 Current release model:
 - SemVer-based versions from workspace manifest
 - GitHub Release publication via `.github/workflows/release.yml`
-- Artifact policy: macOS-only
+- Artifact policy: macOS-only (`.dmg` as primary installer format, `.tar.gz` as fallback binary package)
 
 Current governance model:
 - Protected branch rules with required checks
@@ -83,6 +83,7 @@ Before release:
 
 After release:
 - verify assets match policy (macOS-only)
+- verify both `.dmg` and `.tar.gz` are present
 - verify checksum file exists
 - verify release notes and tag correctness
 

@@ -135,22 +135,76 @@ jobs:
       - name: Build release binary
         run: cargo build --locked --release -p simple-term-app
 
-      - name: Package binary (macOS)
-        id: package_macos
+      - name: Create macOS app bundle
         run: |
           set -euo pipefail
           mkdir -p dist
+          app_root="dist/SimpleTerm.app"
+          bundle_version="${TAG_NAME#v}"
+          mkdir -p "${app_root}/Contents/MacOS"
+          cat > "${app_root}/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+            <dict>
+              <key>CFBundleName</key>
+              <string>SimpleTerm</string>
+              <key>CFBundleDisplayName</key>
+              <string>SimpleTerm</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.simple-term.app</string>
+              <key>CFBundleVersion</key>
+              <string>${bundle_version}</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${bundle_version}</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleExecutable</key>
+              <string>simple-term</string>
+            </dict>
+          </plist>
+          PLIST
+          cp target/release/simple-term "${app_root}/Contents/MacOS/simple-term"
+          chmod +x "${app_root}/Contents/MacOS/simple-term"
+
+      - name: Package binary tarball (macOS)
+        id: package_macos
+        run: |
+          set -euo pipefail
           os="$(echo "${RUNNER_OS}" | tr '[:upper:]' '[:lower:]')"
           arch="$(echo "${RUNNER_ARCH}" | tr '[:upper:]' '[:lower:]')"
           artifact="simple-term-${TAG_NAME}-${os}-${arch}.tar.gz"
           tar -C target/release -czf "dist/${artifact}" simple-term
           echo "artifact_path=dist/${artifact}" >> "$GITHUB_OUTPUT"
 
+      - name: Package DMG (macOS)
+        id: package_dmg
+        run: |
+          set -euo pipefail
+          os="$(echo "${RUNNER_OS}" | tr '[:upper:]' '[:lower:]')"
+          arch="$(echo "${RUNNER_ARCH}" | tr '[:upper:]' '[:lower:]')"
+          stage_dir="dist/dmg-stage"
+          rm -rf "${stage_dir}"
+          mkdir -p "${stage_dir}"
+          cp -R "dist/SimpleTerm.app" "${stage_dir}/"
+          ln -s /Applications "${stage_dir}/Applications"
+          artifact="simple-term-${TAG_NAME}-${os}-${arch}.dmg"
+          hdiutil create \
+            -volname "simple-term ${TAG_NAME}" \
+            -srcfolder "${stage_dir}" \
+            -ov \
+            -format UDZO \
+            "dist/${artifact}"
+          rm -rf "${stage_dir}" "dist/SimpleTerm.app"
+          echo "artifact_path=dist/${artifact}" >> "$GITHUB_OUTPUT"
+
       - name: Upload packaged artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-asset-${{ runner.os }}
-          path: dist/*
+          path: |
+            dist/*.tar.gz
+            dist/*.dmg
           if-no-files-found: error
 
   publish:
