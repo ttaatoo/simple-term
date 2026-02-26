@@ -94,7 +94,7 @@ impl Blinking {
     }
 
     pub fn default_enabled(self) -> bool {
-        matches!(self, Blinking::On)
+        matches!(self, Blinking::On | Blinking::TerminalControlled)
     }
 }
 
@@ -260,6 +260,40 @@ pub struct TerminalSettings {
     /// Path hyperlink timeout in milliseconds
     #[serde(default = "default_hyperlink_timeout")]
     pub path_hyperlink_timeout_ms: u64,
+    /// Last known window placement per monitor key (macOS app shell).
+    #[serde(default)]
+    pub monitor_window_positions: HashMap<String, MonitorWindowPlacement>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct MonitorWindowPlacement {
+    pub x: f32,
+    pub y: f32,
+    #[serde(default)]
+    pub width: Option<f32>,
+    #[serde(default)]
+    pub height: Option<f32>,
+}
+
+impl MonitorWindowPlacement {
+    pub fn approximately_equals(&self, other: &Self, tolerance: f32) -> bool {
+        fn approx(left: f32, right: f32, tolerance: f32) -> bool {
+            (left - right).abs() <= tolerance
+        }
+
+        fn approx_opt(left: Option<f32>, right: Option<f32>, tolerance: f32) -> bool {
+            match (left, right) {
+                (Some(left), Some(right)) => approx(left, right, tolerance),
+                (None, None) => true,
+                _ => false,
+            }
+        }
+
+        approx(self.x, other.x, tolerance)
+            && approx(self.y, other.y, tolerance)
+            && approx_opt(self.width, other.width, tolerance)
+            && approx_opt(self.height, other.height, tolerance)
+    }
 }
 
 fn default_font_size() -> f32 {
@@ -378,6 +412,7 @@ impl Default for TerminalSettings {
             minimum_contrast: default_minimum_contrast(),
             path_hyperlink_regexes: Vec::new(),
             path_hyperlink_timeout_ms: default_hyperlink_timeout(),
+            monitor_window_positions: HashMap::new(),
         }
     }
 }
@@ -433,6 +468,24 @@ impl TerminalSettings {
             self.panel_top_inset = self.panel_top_inset.min(MAX_PANEL_TOP_INSET);
         }
 
+        for placement in self.monitor_window_positions.values_mut() {
+            if placement
+                .width
+                .is_some_and(|width| !width.is_finite() || width <= 0.0)
+            {
+                placement.width = None;
+            }
+            if placement
+                .height
+                .is_some_and(|height| !height.is_finite() || height <= 0.0)
+            {
+                placement.height = None;
+            }
+        }
+        self.monitor_window_positions.retain(|key, placement| {
+            !key.trim().is_empty() && placement.x.is_finite() && placement.y.is_finite()
+        });
+
         self
     }
 
@@ -455,6 +508,20 @@ impl TerminalSettings {
         Self::default()
     }
 
+    /// Load settings from a JSON file and create a default file when missing.
+    pub fn load_or_create(config_path: &PathBuf) -> Self {
+        let settings = Self::load(config_path);
+        if !config_path.exists() {
+            if let Err(err) = settings.save(config_path) {
+                log::warn!(
+                    "failed to initialize settings file at {}: {err}",
+                    config_path.display()
+                );
+            }
+        }
+        settings
+    }
+
     /// Save settings to a JSON file.
     pub fn save(&self, config_path: &PathBuf) -> std::io::Result<()> {
         if let Some(parent) = config_path.parent() {
@@ -468,9 +535,9 @@ impl TerminalSettings {
 
     /// Get the config directory path
     pub fn config_dir() -> PathBuf {
-        directories::ProjectDirs::from("com", "simple-term", "SimpleTerm")
-            .map(|dirs| dirs.config_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("./config"))
+        directories::BaseDirs::new()
+            .map(|dirs| dirs.home_dir().join(".simple-term"))
+            .unwrap_or_else(|| PathBuf::from("./.simple-term"))
     }
 
     /// Get the default config file path
@@ -483,7 +550,7 @@ impl TerminalSettings {
 mod tests {
     use super::{
         default_font_fallbacks, default_font_family, Blinking, CursorShape, LineHeight,
-        ShellConfig, TerminalSettings, TerminalTheme,
+        MonitorWindowPlacement, ShellConfig, TerminalSettings, TerminalTheme,
     };
     use crate::Shell;
     use std::path::PathBuf;
@@ -538,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_controlled_blinking_defaults_to_non_blinking_style() {
+    fn terminal_controlled_blinking_defaults_to_blinking_style() {
         let settings = TerminalSettings {
             cursor_shape: CursorShape::Underline,
             blinking: Blinking::TerminalControlled,
@@ -547,7 +614,7 @@ mod tests {
 
         let style = settings.default_cursor_style();
         assert_eq!(style.shape, super::AlacCursorShape::Underline);
-        assert!(!style.blinking);
+        assert!(style.blinking);
     }
 
     #[test]
@@ -673,6 +740,67 @@ mod tests {
     }
 
     #[test]
+    fn load_sanitizes_invalid_monitor_window_positions() {
+        let path = unique_temp_file("invalid-monitor-window-positions");
+        let json = r#"{
+            "monitor_window_positions": {
+                "": { "x": 1.0, "y": 2.0 },
+                "primary": { "x": 44.0, "y": 66.0, "width": 860.0, "height": 480.0 },
+                "bad_size": { "x": 9.0, "y": 10.0, "width": -1.0, "height": 0.0 }
+            }
+        }"#;
+        std::fs::write(&path, json).expect("write test settings");
+
+        let settings = TerminalSettings::load(&path);
+        std::fs::remove_file(path).ok();
+
+        assert_eq!(settings.monitor_window_positions.len(), 2);
+        assert_eq!(
+            settings.monitor_window_positions.get("primary"),
+            Some(&MonitorWindowPlacement {
+                x: 44.0,
+                y: 66.0,
+                width: Some(860.0),
+                height: Some(480.0),
+            })
+        );
+        assert_eq!(
+            settings.monitor_window_positions.get("bad_size"),
+            Some(&MonitorWindowPlacement {
+                x: 9.0,
+                y: 10.0,
+                width: None,
+                height: None,
+            })
+        );
+    }
+
+    #[test]
+    fn monitor_window_placement_approximate_equality_respects_tolerance() {
+        let base = MonitorWindowPlacement {
+            x: 120.0,
+            y: 80.0,
+            width: Some(640.0),
+            height: Some(320.0),
+        };
+        let near = MonitorWindowPlacement {
+            x: 120.3,
+            y: 79.8,
+            width: Some(640.4),
+            height: Some(319.7),
+        };
+        let far = MonitorWindowPlacement {
+            x: 121.0,
+            y: 80.0,
+            width: Some(640.0),
+            height: Some(320.0),
+        };
+
+        assert!(base.approximately_equals(&near, 0.5));
+        assert!(!base.approximately_equals(&far, 0.5));
+    }
+
+    #[test]
     fn load_clamps_extreme_font_line_height_and_window_size_values() {
         let path = unique_temp_file("extreme-values");
         let json = r#"{
@@ -701,6 +829,28 @@ mod tests {
             path.file_name().and_then(|name| name.to_str()),
             Some("settings.json")
         );
+    }
+
+    #[test]
+    fn config_dir_points_to_simple_term_folder_in_home_directory() {
+        let path = TerminalSettings::config_dir();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(".simple-term")
+        );
+    }
+
+    #[test]
+    fn load_or_create_creates_settings_file_when_missing() {
+        let path = unique_temp_file("load-or-create-missing");
+        std::fs::remove_file(&path).ok();
+
+        let settings = TerminalSettings::load_or_create(&path);
+
+        assert!(path.exists(), "settings file should be created");
+        assert_eq!(settings.font_size, TerminalSettings::default().font_size);
+
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
