@@ -48,6 +48,12 @@ cargo check --workspace
 cargo run -p simple-term-app
 ```
 
+Local packaging preview (builds `SimpleTerm.app` + `.dmg` with icon metadata):
+
+```bash
+make package-macos-local
+```
+
 ## Project layout
 
 Active workspace members are defined in root `Cargo.toml`:
@@ -59,12 +65,12 @@ crates/simple-term
 
 ## Configuration
 
-Settings are loaded from JSON via `TerminalSettings::load(...)`.
+Settings are loaded from JSON via `TerminalSettings::load_or_create(...)`.
 
-- Config directory: `ProjectDirs("com", "simple-term", "SimpleTerm")`
-- Config file: `settings.json` in that directory
+- Config directory: `~/.simple-term`
+- Config file: `~/.simple-term/settings.json`
 
-On missing/invalid config, sane defaults are used.
+If the directory or file is missing, the app creates them automatically. On invalid config, sane defaults are used.
 
 ### Example `settings.json`
 
@@ -100,7 +106,7 @@ Backward compatibility: legacy `"theme": "atom_one_dark"` is still accepted.
 
 Use the top-right `⚙` button in the tab bar to open settings as an overlay popup. Width is responsive (up to 360px) so it remains usable on narrower windows.
 
-- Save model: runtime changes apply immediately and are persisted immediately to `settings.json`.
+- Save model: runtime changes apply immediately and are persisted immediately to `~/.simple-term/settings.json`.
 - Close behavior: click `✕` in the header, click the backdrop, or press `Esc`.
 - Platform behavior: `dock_mode` is editable on macOS and shown as disabled with an explanation on non-macOS.
 

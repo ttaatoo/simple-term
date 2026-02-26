@@ -258,7 +258,23 @@ Avoid:
   - drop previous `GlobalHotKeyManager` registrations before re-registering updated shortcuts
   - when implementing recorder UI, capture shortcut keydown before tab/find/common shortcut handlers so recorded combos do not trigger unrelated actions
   - keep registration failure behavior non-fatal (warn + continue)
-  - manually verify immediate shortcut handoff: old toggle stops working as soon as new toggle is selected in settings
+
+26. Cross-monitor reopen re-enters borrowed app/controller state when activation ordering is wrong
+- Detection: moving pointer to another monitor then pressing `Cmd+F4` logs `RefCell already borrowed`, often with old-monitor flash before final placement
+- Recovery:
+  - keep native frame mutation deferred (`dispatch_async_f`) in `macos.rs`; avoid synchronous `setFrame` in controller update stack
+  - when reopening a hidden window that requires frame move, run `unhide/orderFront/activateIgnoringOtherApps` inside the same deferred native callback after frame apply
+  - return activation ownership from native move API and skip `cx.activate(true)` when native callback is responsible
+  - preserve ordering invariant: `setFrame -> reveal/orderFront -> activate`
+  - verify both symptoms are gone: no borrow logs and no old-monitor flash during repeated cross-monitor toggles
+
+27. Toggle-reopened terminal window appears but does not accept typing until click
+- Detection: after `Cmd+F4` show, terminal is visible but first keypresses are ignored until the user clicks terminal content
+- Recovery:
+  - keep terminal view focus restoration explicit in show paths (`focus_handle.focus(window)` via `TerminalView::focus_terminal`)
+  - apply focus restore for both existing-window reuse and new-window creation paths
+  - do not rely on app/window activation alone as a substitute for GPUI element focus
+  - avoid using `window.activate_window()` in borrowed show-update closures as a focus workaround
 
 ## Verification Strategy
 
