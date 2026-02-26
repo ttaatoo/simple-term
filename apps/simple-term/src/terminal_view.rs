@@ -6,41 +6,313 @@ use alacritty_terminal::index::Side;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors as AlacColors;
 use alacritty_terminal::vte::ansi::{Color as AlacColor, CursorShape, NamedColor, Rgb as AlacRgb};
+use global_hotkey::hotkey::HotKey as GlobalHotKey;
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    canvas, div, fill, hsla, point, px, size, App, AsyncWindowContext, Bounds, ClipboardItem,
-    ContentMask, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures, FontStyle,
-    FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, Rgba, ScrollDelta,
-    ScrollWheelEvent, SharedString, Size, Styled, Subscription, TextRun, WeakEntity, Window,
+    canvas, div, fill, hsla, point, px, rgb, size, App, AppContext, AsyncWindowContext, Bounds,
+    ClipboardItem, ContentMask, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures,
+    FontStyle, FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, Keystroke,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, Rgba,
+    ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement,
+    Styled, Subscription, TextRun, WeakEntity, Window, WindowControlArea,
 };
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use simple_term::alacritty_terminal::index::Boundary;
+use simple_term::alacritty_terminal::term::search::RegexSearch;
 use simple_term::mappings::mouse::{
     alt_scroll, grid_point, grid_point_and_side, mouse_button_report, mouse_moved_report,
     scroll_report,
 };
 use simple_term::terminal::{Terminal, TerminalEvent};
 use simple_term::terminal_hyperlinks::{find_from_grid_point, RegexSearches};
-use simple_term::terminal_settings::TerminalSettings;
+use simple_term::terminal_settings::{
+    Blinking, CursorShape as SettingsCursorShape, LineHeight, TerminalSettings, TerminalTheme,
+};
 use simple_term::{
-    AlacPoint, Dimensions, PathStyle, Selection, SelectionType, TermMode, TerminalBounds,
+    AlacDirection, AlacPoint, Column, Dimensions, Line, PathStyle, Selection, SelectionType,
+    TermMode, TerminalBounds,
 };
 
 mod utils;
 
 use utils::{
-    alternate_scroll_enabled, consume_scroll_lines, display_offset_from_pointer,
-    effective_scroll_multiplier, file_path_to_file_url, mouse_mode_enabled_for_scroll,
-    point_in_bounds, prepare_for_terminal_input, resolve_working_directory, scroll_delta_to_lines,
-    scrollbar_layout, selection_copy_plan, should_ignore_scroll_event, strip_line_column_suffix,
-    text_to_insert, viewport_row_for_line, ScrollbarLayout,
+    alternate_scroll_enabled, common_shortcut_action, consume_scroll_lines,
+    display_offset_from_pointer, effective_scroll_multiplier, file_path_to_file_url,
+    mouse_mode_enabled_for_scroll, point_in_bounds, prepare_for_terminal_input,
+    resolve_working_directory, scroll_delta_to_lines, scrollbar_layout, selection_copy_plan,
+    selection_type_for_click_count, should_ignore_scroll_event, strip_line_column_suffix,
+    text_to_insert, viewport_row_for_line, CommonShortcutAction, ScrollbarLayout,
 };
 
-pub struct TerminalView {
+const TAB_BAR_HEIGHT_PX: f32 = 40.0;
+const TAB_ADD_BUTTON_WIDTH_PX: f32 = 30.0;
+const TAB_DROPDOWN_BUTTON_WIDTH_PX: f32 = 30.0;
+const TAB_BAR_LEFT_DRAG_WIDTH_PX: f32 = 122.0;
+const TAB_ITEM_WIDTH_PX: f32 = 152.0;
+const TAB_ITEM_HEIGHT_PX: f32 = 28.0;
+const TAB_ITEM_INDICATOR_HEIGHT_PX: f32 = 3.0;
+const TAB_ITEM_INDICATOR_BOTTOM_GAP_PX: f32 = 2.0;
+const TAB_CLOSE_BUTTON_SIZE_PX: f32 = 20.0;
+const SETTINGS_BUTTON_WIDTH_PX: f32 = 30.0;
+const FIND_PANEL_MAX_WIDTH_PX: f32 = 760.0;
+const FIND_PANEL_MIN_WIDTH_PX: f32 = 240.0;
+const FIND_PANEL_RESERVED_SPACE_PX: f32 = 320.0;
+const FIND_PANEL_VIEWPORT_MARGIN_PX: f32 = 24.0;
+const SETTINGS_DRAWER_WIDTH_PX: f32 = 360.0;
+const SETTINGS_DRAWER_MIN_WIDTH_PX: f32 = 280.0;
+const SETTINGS_DRAWER_VIEWPORT_MARGIN_PX: f32 = 32.0;
+const SETTINGS_DRAWER_HEADER_HEIGHT_PX: f32 = 44.0;
+const SETTINGS_DRAWER_SCROLLBAR_WIDTH_PX: f32 = 8.0;
+const SETTINGS_DRAWER_SCROLLBAR_TRACK_WIDTH_PX: f32 = 3.0;
+const SETTINGS_DRAWER_SCROLLBAR_TRACK_INSET_PX: f32 = 2.0;
+const SETTINGS_DRAWER_SCROLLBAR_MIN_THUMB_HEIGHT_PX: f32 = 24.0;
+const SETTINGS_DRAWER_SCROLL_CONTENT_PADDING_RIGHT_PX: f32 = 12.0;
+const SETTINGS_OVERLAY_BACKDROP_ALPHA: f32 = 0.28;
+const SETTINGS_NUMERIC_BUTTON_WIDTH_PX: f32 = 24.0;
+const SETTINGS_CONTROL_HEIGHT_PX: f32 = 24.0;
+const SETTINGS_MIN_FONT_SIZE: f32 = 6.0;
+const SETTINGS_MAX_FONT_SIZE: f32 = 72.0;
+const SETTINGS_FONT_SIZE_STEP: f32 = 1.0;
+const SETTINGS_MIN_LINE_HEIGHT_RATIO: f32 = 0.5;
+const SETTINGS_MAX_LINE_HEIGHT_RATIO: f32 = 3.0;
+const SETTINGS_LINE_HEIGHT_STEP: f32 = 0.1;
+const SETTINGS_MIN_SCROLL_MULTIPLIER: f32 = 0.01;
+const SETTINGS_MAX_SCROLL_MULTIPLIER: f32 = 10.0;
+const SETTINGS_SCROLL_MULTIPLIER_STEP: f32 = 0.25;
+const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(530);
+const CURSOR_BLINK_SUPPRESSION_AFTER_INPUT: Duration = Duration::from_millis(800);
+const SELECTION_TINT_ALPHA: f32 = 0.30;
+const THEME_PRESETS: [TerminalTheme; 6] = [
+    TerminalTheme::AtomOneDark,
+    TerminalTheme::GruvboxDark,
+    TerminalTheme::TokyoNight,
+    TerminalTheme::CatppuccinMocha,
+    TerminalTheme::Nord,
+    TerminalTheme::SolarizedDark,
+];
+const SETTINGS_FONT_FAMILY_CANDIDATES: [&str; 11] = [
+    "JetBrains Mono",
+    "SF Mono",
+    "Menlo",
+    "Monaco",
+    "Fira Code",
+    "Hack",
+    "Consolas",
+    "Cascadia Mono",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Noto Sans Mono",
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsLineHeightMode {
+    Comfortable,
+    Standard,
+    Custom,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ThemePalette {
+    ui_bg: u32,
+    terminal_bg: u32,
+    cursor: u32,
+    ansi_colors: [(u8, u8, u8); 16],
+    foreground: (u8, u8, u8),
+    background: (u8, u8, u8),
+}
+
+fn theme_palette(theme: TerminalTheme) -> ThemePalette {
+    match theme {
+        TerminalTheme::AtomOneDark => ThemePalette {
+            ui_bg: 0x101010,
+            terminal_bg: 0x000000,
+            cursor: 0x528bff,
+            ansi_colors: [
+                (0x3F, 0x44, 0x51),
+                (0xE0, 0x55, 0x61),
+                (0x8C, 0xC2, 0x65),
+                (0xD1, 0x8F, 0x52),
+                (0x4A, 0xA5, 0xF0),
+                (0xC1, 0x62, 0xDE),
+                (0x42, 0xB3, 0xC2),
+                (0xD7, 0xDA, 0xE0),
+                (0x4F, 0x56, 0x66),
+                (0xFF, 0x61, 0x6E),
+                (0xA5, 0xE0, 0x75),
+                (0xF0, 0xA4, 0x5D),
+                (0x4D, 0xC4, 0xFF),
+                (0xDE, 0x73, 0xFF),
+                (0x4C, 0xD1, 0xE0),
+                (0xE6, 0xE6, 0xE6),
+            ],
+            foreground: (0xE6, 0xE6, 0xE6),
+            background: (0x00, 0x00, 0x00),
+        },
+        TerminalTheme::GruvboxDark => ThemePalette {
+            ui_bg: 0x1D2021,
+            terminal_bg: 0x282828,
+            cursor: 0xFE8019,
+            ansi_colors: [
+                (0x28, 0x28, 0x28),
+                (0xCC, 0x24, 0x1D),
+                (0x98, 0x97, 0x1A),
+                (0xD7, 0x99, 0x21),
+                (0x45, 0x85, 0x88),
+                (0xB1, 0x62, 0x86),
+                (0x68, 0x9D, 0x6A),
+                (0xA8, 0x99, 0x84),
+                (0x92, 0x83, 0x74),
+                (0xFB, 0x49, 0x34),
+                (0xB8, 0xBB, 0x26),
+                (0xFA, 0xBD, 0x2F),
+                (0x83, 0xA5, 0x98),
+                (0xD3, 0x86, 0x9B),
+                (0x8E, 0xC0, 0x7C),
+                (0xEB, 0xDB, 0xB2),
+            ],
+            foreground: (0xEB, 0xDB, 0xB2),
+            background: (0x28, 0x28, 0x28),
+        },
+        TerminalTheme::TokyoNight => ThemePalette {
+            ui_bg: 0x16161E,
+            terminal_bg: 0x1A1B26,
+            cursor: 0x7AA2F7,
+            ansi_colors: [
+                (0x15, 0x16, 0x1E),
+                (0xF7, 0x76, 0x8E),
+                (0x9E, 0xCE, 0x6A),
+                (0xE0, 0xAF, 0x68),
+                (0x7A, 0xA2, 0xF7),
+                (0xBB, 0x9A, 0xF7),
+                (0x7D, 0xCF, 0xFF),
+                (0xA9, 0xB1, 0xD6),
+                (0x41, 0x48, 0x68),
+                (0xF7, 0x76, 0x8E),
+                (0x9E, 0xCE, 0x6A),
+                (0xE0, 0xAF, 0x68),
+                (0x7A, 0xA2, 0xF7),
+                (0xBB, 0x9A, 0xF7),
+                (0x7D, 0xCF, 0xFF),
+                (0xC0, 0xCA, 0xF5),
+            ],
+            foreground: (0xC0, 0xCA, 0xF5),
+            background: (0x1A, 0x1B, 0x26),
+        },
+        TerminalTheme::CatppuccinMocha => ThemePalette {
+            ui_bg: 0x181825,
+            terminal_bg: 0x1E1E2E,
+            cursor: 0xF5E0DC,
+            ansi_colors: [
+                (0x45, 0x47, 0x5A),
+                (0xF3, 0x8B, 0xA8),
+                (0xA6, 0xE3, 0xA1),
+                (0xF9, 0xE2, 0xAF),
+                (0x89, 0xB4, 0xFA),
+                (0xF5, 0xC2, 0xE7),
+                (0x94, 0xE2, 0xD5),
+                (0xBA, 0xC2, 0xDE),
+                (0x58, 0x5B, 0x70),
+                (0xF3, 0x8B, 0xA8),
+                (0xA6, 0xE3, 0xA1),
+                (0xF9, 0xE2, 0xAF),
+                (0x89, 0xB4, 0xFA),
+                (0xF5, 0xC2, 0xE7),
+                (0x94, 0xE2, 0xD5),
+                (0xA6, 0xAD, 0xC8),
+            ],
+            foreground: (0xCD, 0xD6, 0xF4),
+            background: (0x1E, 0x1E, 0x2E),
+        },
+        TerminalTheme::Nord => ThemePalette {
+            ui_bg: 0x242933,
+            terminal_bg: 0x2E3440,
+            cursor: 0x88C0D0,
+            ansi_colors: [
+                (0x3B, 0x42, 0x52),
+                (0xBF, 0x61, 0x6A),
+                (0xA3, 0xBE, 0x8C),
+                (0xEB, 0xCB, 0x8B),
+                (0x81, 0xA1, 0xC1),
+                (0xB4, 0x8E, 0xAD),
+                (0x88, 0xC0, 0xD0),
+                (0xE5, 0xE9, 0xF0),
+                (0x4C, 0x56, 0x6A),
+                (0xBF, 0x61, 0x6A),
+                (0xA3, 0xBE, 0x8C),
+                (0xEB, 0xCB, 0x8B),
+                (0x81, 0xA1, 0xC1),
+                (0xB4, 0x8E, 0xAD),
+                (0x8F, 0xBC, 0xBB),
+                (0xEC, 0xEF, 0xF4),
+            ],
+            foreground: (0xD8, 0xDE, 0xE9),
+            background: (0x2E, 0x34, 0x40),
+        },
+        TerminalTheme::SolarizedDark => ThemePalette {
+            ui_bg: 0x001F27,
+            terminal_bg: 0x002B36,
+            cursor: 0x268BD2,
+            ansi_colors: [
+                (0x07, 0x36, 0x42),
+                (0xDC, 0x32, 0x2F),
+                (0x85, 0x99, 0x00),
+                (0xB5, 0x89, 0x00),
+                (0x26, 0x8B, 0xD2),
+                (0xD3, 0x36, 0x82),
+                (0x2A, 0xA1, 0x98),
+                (0xEE, 0xE8, 0xD5),
+                (0x00, 0x2B, 0x36),
+                (0xCB, 0x4B, 0x16),
+                (0x58, 0x6E, 0x75),
+                (0x65, 0x7B, 0x83),
+                (0x83, 0x94, 0x96),
+                (0x6C, 0x71, 0xC4),
+                (0x93, 0xA1, 0xA1),
+                (0xFD, 0xF6, 0xE3),
+            ],
+            foreground: (0x83, 0x94, 0x96),
+            background: (0x00, 0x2B, 0x36),
+        },
+    }
+}
+
+struct TerminalTab {
+    id: u64,
+    number: usize,
+    title: String,
     terminal: Terminal,
+}
+
+#[derive(Clone, Debug)]
+struct TabTitleTooltip {
+    title: SharedString,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FindMatch {
+    start: AlacPoint,
+    end: AlacPoint,
+}
+
+#[derive(Clone, Debug, Default)]
+struct FindState {
+    query: String,
+    last_match: Option<FindMatch>,
+    match_count: usize,
+    active_match_index: Option<usize>,
+}
+
+pub struct TerminalView {
+    tabs: Vec<TerminalTab>,
+    active_tab_id: u64,
+    hovered_tab_id: Option<u64>,
+    next_tab_id: u64,
+    on_hide_terminal_requested: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_hotkeys_updated: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
     regex_searches: RegexSearches,
     settings: TerminalSettings,
     focus_handle: FocusHandle,
@@ -52,11 +324,19 @@ pub struct TerminalView {
     suppress_precise_scroll_until: Option<Instant>,
     suppress_precise_scroll_until_ended: bool,
     selection_anchor: Option<(AlacPoint, Side)>,
+    find_state: Option<FindState>,
+    settings_panel_open: bool,
+    recording_global_hotkey: bool,
+    window_has_been_active: bool,
+    cursor_blink_visible: bool,
+    suppress_cursor_blink_until: Option<Instant>,
+    settings_drawer_scroll_handle: ScrollHandle,
     scrollbar_drag_offset: Option<Pixels>,
     row_text_cache: Vec<CachedRow>,
     previous_frame: Option<FrameCache>,
     perf: PerfInstrumentation,
     _resize_subscription: Subscription,
+    _activation_subscription: Subscription,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -74,7 +354,9 @@ struct FrameCache {
     display_offset: usize,
     cursor_row: Option<usize>,
     cursor_col: usize,
+    cursor_shape: CursorShape,
     show_cursor: bool,
+    cursor_draw_visible: bool,
 }
 
 impl FrameCache {
@@ -87,8 +369,25 @@ impl FrameCache {
             display_offset: snapshot.display_offset,
             cursor_row: snapshot.cursor_row,
             cursor_col: snapshot.cursor_col,
+            cursor_shape: snapshot.cursor_shape,
             show_cursor: snapshot.show_cursor,
+            cursor_draw_visible: snapshot.cursor_draw_visible,
         }
+    }
+}
+
+impl Render for TabTitleTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+            .bg(hsla(0.0, 0.0, 0.06, 0.96))
+            .text_xs()
+            .text_color(hsla(0.0, 0.0, 1.0, 0.9))
+            .child(self.title.clone())
     }
 }
 
@@ -241,7 +540,380 @@ fn update_action_for_terminal_event(event: TerminalEvent) -> ViewUpdateAction {
 }
 
 impl TerminalView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>, settings: TerminalSettings) -> Self {
+    fn sanitize_tab_title(raw: &str) -> String {
+        let cleaned: String = raw
+            .chars()
+            .filter(|ch| *ch == '\t' || !ch.is_control())
+            .collect();
+        let trimmed = cleaned.trim();
+        if trimmed.is_empty() {
+            "shell".to_string()
+        } else {
+            trimmed.chars().take(60).collect()
+        }
+    }
+
+    fn next_tab_number_from_numbers(existing_numbers: &[usize]) -> usize {
+        let mut candidate = 1usize;
+        loop {
+            if existing_numbers.iter().all(|number| *number != candidate) {
+                return candidate;
+            }
+            candidate += 1;
+        }
+    }
+
+    fn next_tab_number(existing_tabs: &[TerminalTab]) -> usize {
+        let existing_numbers: Vec<usize> = existing_tabs.iter().map(|tab| tab.number).collect();
+        Self::next_tab_number_from_numbers(&existing_numbers)
+    }
+
+    fn next_active_index_after_close(closing_index: usize, new_len: usize) -> usize {
+        closing_index.min(new_len.saturating_sub(1))
+    }
+
+    fn should_hide_window_when_closing_tab(tab_count: usize) -> bool {
+        tab_count <= 1
+    }
+
+    fn hovered_tab_id_after_event(
+        current: Option<u64>,
+        tab_id: u64,
+        is_hovered: bool,
+    ) -> Option<u64> {
+        if is_hovered {
+            Some(tab_id)
+        } else if current == Some(tab_id) {
+            None
+        } else {
+            current
+        }
+    }
+
+    fn should_schedule_window_deactivation_hide(
+        auto_hide_on_outside_click: bool,
+        window_is_active: bool,
+        window_has_been_active: bool,
+    ) -> bool {
+        auto_hide_on_outside_click && !window_is_active && window_has_been_active
+    }
+
+    fn schedule_window_deactivation_hide(
+        auto_hide_on_outside_click: bool,
+        window_is_active: bool,
+        window_has_been_active: bool,
+        on_window_deactivated: Option<Arc<dyn Fn() + Send + Sync>>,
+        mut schedule: impl FnMut(Arc<dyn Fn() + Send + Sync>),
+    ) {
+        if !Self::should_schedule_window_deactivation_hide(
+            auto_hide_on_outside_click,
+            window_is_active,
+            window_has_been_active,
+        ) {
+            return;
+        }
+
+        if let Some(on_window_deactivated) = on_window_deactivated {
+            schedule(on_window_deactivated);
+        }
+    }
+
+    fn request_hide_terminal_window(&self, cx: &mut Context<Self>) {
+        if let Some(on_hide_terminal_requested) = self.on_hide_terminal_requested.as_ref() {
+            on_hide_terminal_requested();
+        } else {
+            cx.hide();
+        }
+    }
+
+    fn terminal_grid_for_viewport(viewport: Size<Pixels>, cell_size: Size<Pixels>) -> Size<u16> {
+        let content_height = if viewport.height > px(TAB_BAR_HEIGHT_PX) {
+            viewport.height - px(TAB_BAR_HEIGHT_PX)
+        } else {
+            px(1.0)
+        };
+
+        let cols = std::cmp::max(
+            (f32::from(viewport.width) / f32::from(cell_size.width)) as u16,
+            1,
+        );
+        let lines = std::cmp::max(
+            (f32::from(content_height) / f32::from(cell_size.height)) as u16,
+            1,
+        );
+
+        Size {
+            width: cols,
+            height: lines,
+        }
+    }
+
+    fn window_size_for_grid(grid_size: Size<u16>, cell_size: Size<Pixels>) -> WindowSize {
+        WindowSize {
+            num_lines: grid_size.height,
+            num_cols: grid_size.width,
+            cell_width: f32::from(cell_size.width) as u16,
+            cell_height: f32::from(cell_size.height) as u16,
+        }
+    }
+
+    fn spawn_terminal(
+        settings: &TerminalSettings,
+        window_size: WindowSize,
+    ) -> std::io::Result<Terminal> {
+        let scrollback_lines = settings
+            .max_scroll_history_lines
+            .unwrap_or(simple_term::config::DEFAULT_SCROLL_HISTORY_LINES);
+        let working_directory = resolve_working_directory(&settings.working_directory);
+        Terminal::new(
+            settings.shell.to_shell(),
+            working_directory,
+            window_size,
+            scrollback_lines,
+            settings.env.clone(),
+            settings.default_cursor_style(),
+        )
+    }
+
+    fn tab_display_title(tab: &TerminalTab) -> String {
+        format!("{}: {}", tab.number, tab.title)
+    }
+
+    fn push_unique_font_family(options: &mut Vec<String>, family: &str) {
+        let trimmed = family.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if options
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(trimmed))
+        {
+            return;
+        }
+        options.push(trimmed.to_string());
+    }
+
+    fn font_family_options_from_settings(settings: &TerminalSettings) -> Vec<String> {
+        let mut options = Vec::new();
+        Self::push_unique_font_family(&mut options, &settings.font_family);
+        for fallback in &settings.font_fallbacks {
+            Self::push_unique_font_family(&mut options, fallback);
+        }
+        for candidate in SETTINGS_FONT_FAMILY_CANDIDATES {
+            Self::push_unique_font_family(&mut options, candidate);
+        }
+        options
+    }
+
+    fn next_font_family(current: &str, options: &[String], direction: isize) -> String {
+        if options.is_empty() {
+            return current.to_string();
+        }
+
+        let current_index = options
+            .iter()
+            .position(|family| family == current)
+            .or_else(|| {
+                options
+                    .iter()
+                    .position(|family| family.eq_ignore_ascii_case(current))
+            })
+            .unwrap_or(0);
+
+        let next_index = (current_index as isize + direction).rem_euclid(options.len() as isize);
+        options[next_index as usize].clone()
+    }
+
+    fn theme_label(theme: TerminalTheme) -> &'static str {
+        match theme {
+            TerminalTheme::AtomOneDark => "Atom One Dark",
+            TerminalTheme::GruvboxDark => "Gruvbox Dark",
+            TerminalTheme::TokyoNight => "Tokyo Night",
+            TerminalTheme::CatppuccinMocha => "Catppuccin",
+            TerminalTheme::Nord => "Nord",
+            TerminalTheme::SolarizedDark => "Solarized Dark",
+        }
+    }
+
+    fn next_theme(current: TerminalTheme, direction: isize) -> TerminalTheme {
+        let current_index = THEME_PRESETS
+            .iter()
+            .position(|theme| *theme == current)
+            .unwrap_or(0);
+        let next_index =
+            (current_index as isize + direction).rem_euclid(THEME_PRESETS.len() as isize);
+        THEME_PRESETS[next_index as usize]
+    }
+
+    fn toggled_settings_panel_open(is_open: bool) -> bool {
+        !is_open
+    }
+
+    fn find_panel_width_for_viewport(viewport_width: Pixels) -> Pixels {
+        let max_width = (viewport_width - px(FIND_PANEL_VIEWPORT_MARGIN_PX)).max(px(0.0));
+        let lower_bound = px(FIND_PANEL_MIN_WIDTH_PX).min(max_width);
+        let preferred = (viewport_width - px(FIND_PANEL_RESERVED_SPACE_PX))
+            .min(px(FIND_PANEL_MAX_WIDTH_PX))
+            .max(lower_bound);
+        preferred.min(max_width)
+    }
+
+    fn settings_drawer_width_for_viewport(viewport_width: Pixels) -> Pixels {
+        let max_width = (viewport_width - px(SETTINGS_DRAWER_VIEWPORT_MARGIN_PX)).max(px(0.0));
+        let lower_bound = px(SETTINGS_DRAWER_MIN_WIDTH_PX).min(max_width);
+        px(SETTINGS_DRAWER_WIDTH_PX).min(max_width).max(lower_bound)
+    }
+
+    fn settings_drawer_scrollbar_width() -> Pixels {
+        px(SETTINGS_DRAWER_SCROLLBAR_WIDTH_PX)
+    }
+
+    fn settings_drawer_scrollbar_thumb_metrics(
+        viewport_height: Pixels,
+        max_scroll_offset: Pixels,
+        scroll_offset: Pixels,
+    ) -> Option<(Pixels, Pixels)> {
+        if viewport_height <= px(0.0) || max_scroll_offset <= px(0.0) {
+            return None;
+        }
+
+        let content_height = viewport_height + max_scroll_offset;
+        let visible_ratio = (viewport_height / content_height).clamp(0.0, 1.0);
+        let thumb_height = (viewport_height * visible_ratio)
+            .max(px(SETTINGS_DRAWER_SCROLLBAR_MIN_THUMB_HEIGHT_PX))
+            .min(viewport_height);
+
+        let travel = (viewport_height - thumb_height).max(px(0.0));
+        let progress = (-scroll_offset / max_scroll_offset).clamp(0.0, 1.0);
+        let thumb_top = travel * progress;
+
+        Some((thumb_top, thumb_height))
+    }
+
+    fn settings_drawer_scrollbar_metrics(&self) -> Option<(Pixels, Pixels)> {
+        let bounds = self.settings_drawer_scroll_handle.bounds();
+        Self::settings_drawer_scrollbar_thumb_metrics(
+            bounds.size.height,
+            self.settings_drawer_scroll_handle.max_offset().height,
+            self.settings_drawer_scroll_handle.offset().y,
+        )
+    }
+
+    fn should_close_settings_panel_for_keystroke(keystroke: &Keystroke) -> bool {
+        let modifiers = keystroke.modifiers;
+        keystroke.key == "escape" && !modifiers.platform && !modifiers.control && !modifiers.alt
+    }
+
+    fn line_height_mode(line_height: &LineHeight) -> SettingsLineHeightMode {
+        match line_height {
+            LineHeight::Comfortable => SettingsLineHeightMode::Comfortable,
+            LineHeight::Standard => SettingsLineHeightMode::Standard,
+            LineHeight::Custom { .. } => SettingsLineHeightMode::Custom,
+        }
+    }
+
+    fn normalized_scroll_multiplier(value: f32) -> f32 {
+        if value.is_finite() {
+            value.clamp(
+                SETTINGS_MIN_SCROLL_MULTIPLIER,
+                SETTINGS_MAX_SCROLL_MULTIPLIER,
+            )
+        } else {
+            1.0
+        }
+    }
+
+    fn global_hotkey_key_token(key: &str) -> Option<String> {
+        let normalized = key.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return None;
+        }
+
+        if matches!(
+            normalized.as_str(),
+            "shift"
+                | "control"
+                | "ctrl"
+                | "alt"
+                | "option"
+                | "command"
+                | "cmd"
+                | "super"
+                | "meta"
+                | "fn"
+                | "function"
+        ) {
+            return None;
+        }
+
+        match normalized.as_str() {
+            "backquote" | "`" => return Some("Backquote".to_string()),
+            "space" => return Some("Space".to_string()),
+            "tab" => return Some("Tab".to_string()),
+            "enter" | "return" => return Some("Enter".to_string()),
+            "escape" => return Some("Escape".to_string()),
+            "backspace" => return Some("Backspace".to_string()),
+            "delete" => return Some("Delete".to_string()),
+            _ => {}
+        }
+
+        if normalized.starts_with('f')
+            && normalized.len() > 1
+            && normalized[1..].chars().all(|ch| ch.is_ascii_digit())
+        {
+            return Some(format!("F{}", &normalized[1..]));
+        }
+
+        if normalized.len() == 1 {
+            let ch = normalized.chars().next().expect("single character");
+            if ch.is_ascii_alphanumeric() {
+                return Some(ch.to_ascii_uppercase().to_string());
+            }
+        }
+
+        None
+    }
+
+    fn global_hotkey_from_keystroke(keystroke: &Keystroke) -> Option<String> {
+        let modifiers = keystroke.modifiers;
+        if !modifiers.platform && !modifiers.control && !modifiers.alt {
+            return None;
+        }
+
+        let key_token = Self::global_hotkey_key_token(&keystroke.key)?;
+        let mut parts = Vec::with_capacity(5);
+        if modifiers.platform {
+            parts.push("command".to_string());
+        }
+        if modifiers.control {
+            parts.push("control".to_string());
+        }
+        if modifiers.alt {
+            parts.push("alt".to_string());
+        }
+        if modifiers.shift {
+            parts.push("shift".to_string());
+        }
+        parts.push(key_token);
+
+        let candidate = parts.join("+");
+        candidate.parse::<GlobalHotKey>().ok().map(|_| candidate)
+    }
+
+    fn persist_settings(&self) {
+        let config_path = TerminalSettings::config_path();
+        if let Err(err) = self.settings.save(&config_path) {
+            log::warn!(
+                "failed to save settings to {}: {err}",
+                config_path.display()
+            );
+        }
+    }
+
+    fn resolve_font_and_cell_size(
+        window: &Window,
+        settings: &TerminalSettings,
+    ) -> (Font, Pixels, Size<Pixels>) {
         let text_system = window.text_system().clone();
         let mut font = Font {
             family: SharedString::from(settings.font_family.clone()),
@@ -277,7 +949,6 @@ impl TerminalView {
             }
         }
 
-        // Calculate cell dimensions from font metrics
         let font_id = text_system.resolve_font(&font);
         let cell_advance = text_system
             .advance(font_id, font_size, 'm')
@@ -285,54 +956,430 @@ impl TerminalView {
                 width: px(8.4),
                 height: px(17.0),
             });
-        let cell_width = cell_advance.width;
-        let line_height = font_size * settings.line_height.to_ratio();
-
-        // Compute initial grid size from window dimensions
-        let viewport = window.viewport_size();
-        let initial_cols = std::cmp::max(
-            (f32::from(viewport.width) / f32::from(cell_width)) as u16,
-            1,
-        );
-        let initial_lines = std::cmp::max(
-            (f32::from(viewport.height) / f32::from(line_height)) as u16,
-            1,
-        );
-
-        let window_size = WindowSize {
-            num_lines: initial_lines,
-            num_cols: initial_cols,
-            cell_width: f32::from(cell_width) as u16,
-            cell_height: f32::from(line_height) as u16,
+        let cell_size = Size {
+            width: cell_advance.width,
+            height: font_size * settings.line_height.to_ratio(),
         };
 
-        let scrollback_lines = settings
-            .max_scroll_history_lines
-            .unwrap_or(simple_term::config::DEFAULT_SCROLL_HISTORY_LINES);
-        let working_directory = resolve_working_directory(&settings.working_directory);
-        let terminal = Terminal::new(
-            settings.shell.to_shell(),
-            working_directory,
-            window_size,
-            scrollback_lines,
-            settings.env.clone(),
+        (font, font_size, cell_size)
+    }
+
+    fn sync_grid_to_viewport(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+        force_resize: bool,
+    ) {
+        let new_grid_size =
+            Self::terminal_grid_for_viewport(window.viewport_size(), self.cell_size);
+        if new_grid_size.width == 0 || new_grid_size.height == 0 {
+            return;
+        }
+
+        let grid_changed = new_grid_size.width != self.grid_size.width
+            || new_grid_size.height != self.grid_size.height;
+        if !grid_changed && !force_resize {
+            return;
+        }
+
+        let window_size = Self::window_size_for_grid(new_grid_size, self.cell_size);
+        for tab in &self.tabs {
+            tab.terminal.resize(window_size);
+        }
+        self.grid_size = new_grid_size;
+        self.reset_active_tab_frame_state();
+        cx.notify();
+    }
+
+    fn apply_typography_settings(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let (font, font_size, cell_size) = Self::resolve_font_and_cell_size(window, &self.settings);
+        self.font = font;
+        self.font_size = font_size;
+        self.cell_size = cell_size;
+        self.sync_grid_to_viewport(window, cx, true);
+    }
+
+    fn persist_and_notify(&self, cx: &mut Context<Self>) {
+        self.persist_settings();
+        cx.notify();
+    }
+
+    fn cycle_font_family(&mut self, direction: isize, window: &Window, cx: &mut Context<Self>) {
+        let options = Self::font_family_options_from_settings(&self.settings);
+        let next_font = Self::next_font_family(&self.settings.font_family, &options, direction);
+        if next_font == self.settings.font_family {
+            return;
+        }
+
+        self.settings.font_family = next_font;
+        self.apply_typography_settings(window, cx);
+        self.persist_settings();
+    }
+
+    fn adjust_font_size(&mut self, delta: f32, window: &Window, cx: &mut Context<Self>) {
+        let next_size =
+            (self.settings.font_size + delta).clamp(SETTINGS_MIN_FONT_SIZE, SETTINGS_MAX_FONT_SIZE);
+        if (next_size - self.settings.font_size).abs() < f32::EPSILON {
+            return;
+        }
+
+        self.settings.font_size = next_size;
+        self.apply_typography_settings(window, cx);
+        self.persist_settings();
+    }
+
+    fn cycle_theme(&mut self, direction: isize, cx: &mut Context<Self>) {
+        let next_theme = Self::next_theme(self.settings.theme, direction);
+        if next_theme == self.settings.theme {
+            return;
+        }
+
+        self.settings.theme = next_theme;
+        self.persist_and_notify(cx);
+    }
+
+    fn line_height_display(line_height: &LineHeight) -> String {
+        match line_height {
+            LineHeight::Comfortable => "comfortable".to_string(),
+            LineHeight::Standard => "standard".to_string(),
+            LineHeight::Custom { value } => format!("{value:.2}"),
+        }
+    }
+
+    fn set_line_height_mode(
+        &mut self,
+        mode: SettingsLineHeightMode,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let next = match mode {
+            SettingsLineHeightMode::Comfortable => LineHeight::Comfortable,
+            SettingsLineHeightMode::Standard => LineHeight::Standard,
+            SettingsLineHeightMode::Custom => {
+                let current = self.settings.line_height.to_ratio().clamp(
+                    SETTINGS_MIN_LINE_HEIGHT_RATIO,
+                    SETTINGS_MAX_LINE_HEIGHT_RATIO,
+                );
+                LineHeight::Custom { value: current }
+            }
+        };
+        if self.settings.line_height == next {
+            return;
+        }
+        self.settings.line_height = next;
+        self.apply_typography_settings(window, cx);
+        self.persist_settings();
+    }
+
+    fn adjust_line_height_custom(&mut self, delta: f32, window: &Window, cx: &mut Context<Self>) {
+        let current = self.settings.line_height.to_ratio();
+        let next = (current + delta).clamp(
+            SETTINGS_MIN_LINE_HEIGHT_RATIO,
+            SETTINGS_MAX_LINE_HEIGHT_RATIO,
+        );
+        if (next - current).abs() < f32::EPSILON {
+            return;
+        }
+        self.settings.line_height = LineHeight::Custom { value: next };
+        self.apply_typography_settings(window, cx);
+        self.persist_settings();
+    }
+
+    fn adjust_scroll_multiplier(&mut self, delta: f32, cx: &mut Context<Self>) {
+        let current = Self::normalized_scroll_multiplier(self.settings.scroll_multiplier);
+        let next = Self::normalized_scroll_multiplier(current + delta);
+        if (next - current).abs() < f32::EPSILON {
+            return;
+        }
+        self.settings.scroll_multiplier = next;
+        self.persist_and_notify(cx);
+    }
+
+    fn apply_global_hotkey_setting(&mut self, hotkey: String, cx: &mut Context<Self>) {
+        if self.settings.global_hotkey == hotkey {
+            cx.notify();
+            return;
+        }
+
+        self.settings.global_hotkey = hotkey;
+        self.persist_and_notify(cx);
+        if let Some(on_hotkeys_updated) = &self.on_hotkeys_updated {
+            on_hotkeys_updated(
+                self.settings.global_hotkey.clone(),
+                self.settings.pin_hotkey.clone(),
+            );
+        }
+    }
+
+    fn set_global_hotkey_recording(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.recording_global_hotkey == enabled {
+            return;
+        }
+
+        self.recording_global_hotkey = enabled;
+        cx.notify();
+    }
+
+    fn handle_global_hotkey_recording(
+        &mut self,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.recording_global_hotkey {
+            return false;
+        }
+
+        if Self::should_close_settings_panel_for_keystroke(&event.keystroke) {
+            self.recording_global_hotkey = false;
+            cx.notify();
+            return true;
+        }
+
+        let Some(recorded_hotkey) = Self::global_hotkey_from_keystroke(&event.keystroke) else {
+            return true;
+        };
+
+        self.recording_global_hotkey = false;
+        self.apply_global_hotkey_setting(recorded_hotkey, cx);
+        true
+    }
+
+    fn set_copy_on_select(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.settings.copy_on_select == enabled {
+            return;
+        }
+        self.settings.copy_on_select = enabled;
+        self.persist_and_notify(cx);
+    }
+
+    fn set_keep_selection_on_copy(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.settings.keep_selection_on_copy == enabled {
+            return;
+        }
+        self.settings.keep_selection_on_copy = enabled;
+        self.persist_and_notify(cx);
+    }
+
+    fn set_option_as_meta(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.settings.option_as_meta == enabled {
+            return;
+        }
+        self.settings.option_as_meta = enabled;
+        self.persist_and_notify(cx);
+    }
+
+    fn cursor_style_escape(shape: SettingsCursorShape, blinking: Blinking) -> &'static str {
+        let blink = blinking.default_enabled();
+        match shape {
+            SettingsCursorShape::Block => {
+                if blink {
+                    "\u{1b}[1 q"
+                } else {
+                    "\u{1b}[2 q"
+                }
+            }
+            SettingsCursorShape::Underline => {
+                if blink {
+                    "\u{1b}[3 q"
+                } else {
+                    "\u{1b}[4 q"
+                }
+            }
+            SettingsCursorShape::Bar => {
+                if blink {
+                    "\u{1b}[5 q"
+                } else {
+                    "\u{1b}[6 q"
+                }
+            }
+            SettingsCursorShape::Hollow => "\u{1b}[2 q",
+        }
+    }
+
+    fn apply_cursor_settings(&mut self, cx: &mut Context<Self>) {
+        let escape = Self::cursor_style_escape(self.settings.cursor_shape, self.settings.blinking);
+        for tab in &self.tabs {
+            tab.terminal.write_str(escape);
+        }
+        self.previous_frame = None;
+        self.persist_and_notify(cx);
+    }
+
+    fn set_cursor_shape_setting(&mut self, shape: SettingsCursorShape, cx: &mut Context<Self>) {
+        if self.settings.cursor_shape == shape {
+            return;
+        }
+        self.settings.cursor_shape = shape;
+        self.apply_cursor_settings(cx);
+    }
+
+    fn set_blinking_setting(&mut self, blinking: Blinking, cx: &mut Context<Self>) {
+        if self.settings.blinking == blinking {
+            return;
+        }
+        self.settings.blinking = blinking;
+        self.apply_cursor_settings(cx);
+    }
+
+    fn toggle_settings_panel(&mut self, cx: &mut Context<Self>) {
+        self.settings_panel_open = Self::toggled_settings_panel_open(self.settings_panel_open);
+        if !self.settings_panel_open {
+            self.recording_global_hotkey = false;
+        }
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    fn tab_item_vertical_footprint_px(_has_separator_in_flow: bool) -> f32 {
+        TAB_ITEM_HEIGHT_PX + TAB_ITEM_INDICATOR_HEIGHT_PX + TAB_ITEM_INDICATOR_BOTTOM_GAP_PX
+    }
+
+    fn active_tab_index(&self) -> usize {
+        self.tabs
+            .iter()
+            .position(|tab| tab.id == self.active_tab_id)
+            .unwrap_or(0)
+    }
+
+    fn active_tab(&self) -> &TerminalTab {
+        &self.tabs[self.active_tab_index()]
+    }
+
+    fn active_terminal(&self) -> &Terminal {
+        &self.active_tab().terminal
+    }
+
+    fn active_window_title(&self) -> String {
+        Self::tab_display_title(self.active_tab())
+    }
+
+    fn reset_active_tab_frame_state(&mut self) {
+        self.pending_scroll_lines = 0.0;
+        self.suppress_precise_scroll_until = None;
+        self.suppress_precise_scroll_until_ended = false;
+        self.hovered_tab_id = None;
+        self.selection_anchor = None;
+        self.find_state = None;
+        self.cursor_blink_visible = true;
+        self.suppress_cursor_blink_until = None;
+        self.scrollbar_drag_offset = None;
+        self.row_text_cache.clear();
+        self.previous_frame = None;
+    }
+
+    fn set_active_tab(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_tab_id == tab_id {
+            return;
+        }
+        if !self.tabs.iter().any(|tab| tab.id == tab_id) {
+            return;
+        }
+
+        self.active_tab_id = tab_id;
+        self.reset_active_tab_frame_state();
+        window.set_window_title(&self.active_window_title());
+        cx.notify();
+    }
+
+    fn set_active_tab_relative(
+        &mut self,
+        direction: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tabs.is_empty() {
+            return;
+        }
+
+        let current_index = self.active_tab_index() as isize;
+        let tab_count = self.tabs.len() as isize;
+        let next_index = (current_index + direction).rem_euclid(tab_count) as usize;
+        let next_tab_id = self.tabs[next_index].id;
+        self.set_active_tab(next_tab_id, window, cx);
+    }
+
+    fn create_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let number = Self::next_tab_number(&self.tabs);
+        let terminal = Self::spawn_terminal(
+            &self.settings,
+            Self::window_size_for_grid(self.grid_size, self.cell_size),
         )
         .expect("Failed to spawn terminal");
-        let regex_searches = RegexSearches::new(
-            &settings.path_hyperlink_regexes,
-            settings.path_hyperlink_timeout_ms,
-        );
-
-        let focus_handle = cx.focus_handle();
-
-        // Resize terminal when window bounds change
-        let resize_subscription =
-            cx.observe_window_bounds(window, |this: &mut Self, window, cx| {
-                this.handle_resize(window, cx);
-            });
-
-        // Poll for terminal events to trigger re-renders
         let events = terminal.events.clone();
+        let title = number.to_string();
+
+        self.tabs.push(TerminalTab {
+            id: tab_id,
+            number,
+            title,
+            terminal,
+        });
+        self.active_tab_id = tab_id;
+        self.reset_active_tab_frame_state();
+
+        Self::spawn_terminal_event_loop(tab_id, events, window, cx);
+        window.set_window_title(&self.active_window_title());
+        cx.notify();
+    }
+
+    fn close_tab(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if Self::should_hide_window_when_closing_tab(self.tabs.len()) {
+            self.request_hide_terminal_window(cx);
+            return;
+        }
+
+        let Some(closing_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let was_active = self.active_tab_id == tab_id;
+        if self.hovered_tab_id == Some(tab_id) {
+            self.hovered_tab_id = None;
+        }
+
+        self.tabs.remove(closing_index);
+        if was_active {
+            let next_active_index =
+                Self::next_active_index_after_close(closing_index, self.tabs.len());
+            self.active_tab_id = self.tabs[next_active_index].id;
+            self.reset_active_tab_frame_state();
+            window.set_window_title(&self.active_window_title());
+        }
+
+        cx.notify();
+    }
+
+    fn update_tab_title(
+        &mut self,
+        tab_id: u64,
+        raw_title: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+
+        let title = Self::sanitize_tab_title(raw_title);
+        if tab.title == title {
+            return;
+        }
+        tab.title = title;
+
+        if self.active_tab_id == tab_id {
+            window.set_window_title(&self.active_window_title());
+        }
+        cx.notify();
+    }
+
+    fn spawn_terminal_event_loop(
+        tab_id: u64,
+        events: smol::channel::Receiver<TerminalEvent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn_in(
             window,
             async move |this: WeakEntity<TerminalView>, cx: &mut AsyncWindowContext| {
@@ -340,13 +1387,18 @@ impl TerminalView {
                     match update_action_for_terminal_event(event) {
                         ViewUpdateAction::Notify => {
                             let _ = cx.update(|_window, cx| {
-                                let _ = this.update(cx, |_, cx| cx.notify());
+                                let _ = this.update(cx, |this, cx| {
+                                    if this.active_tab_id == tab_id {
+                                        cx.notify();
+                                    }
+                                });
                             });
                         }
                         ViewUpdateAction::SetTitleAndNotify(title) => {
                             let _ = cx.update(|window, cx| {
-                                window.set_window_title(&title);
-                                let _ = this.update(cx, |_, cx| cx.notify());
+                                let _ = this.update(cx, |this, cx| {
+                                    this.update_tab_title(tab_id, &title, window, cx);
+                                });
                             });
                         }
                         ViewUpdateAction::Ignore => {}
@@ -356,36 +1408,135 @@ impl TerminalView {
             },
         )
         .detach();
+    }
 
-        TerminalView {
-            terminal,
+    fn spawn_cursor_blink_loop(window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(
+            window,
+            async move |this: WeakEntity<TerminalView>, cx: &mut AsyncWindowContext| loop {
+                smol::Timer::after(CURSOR_BLINK_INTERVAL).await;
+
+                let updated = cx.update(|_window, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        let terminal_blinking = {
+                            let term = this.active_terminal().term.lock();
+                            term.cursor_style().blinking
+                        };
+                        let now = Instant::now();
+                        let suppress_blink = this.cursor_blink_suppressed(now);
+                        let should_blink =
+                            cursor_should_blink(this.settings.blinking, terminal_blinking)
+                                && !suppress_blink;
+                        if should_blink {
+                            this.cursor_blink_visible = !this.cursor_blink_visible;
+                            this.previous_frame = None;
+                            cx.notify();
+                        } else if !this.cursor_blink_visible {
+                            this.cursor_blink_visible = true;
+                            this.previous_frame = None;
+                            cx.notify();
+                        }
+                    });
+                });
+
+                if updated.is_err() {
+                    break;
+                }
+            },
+        )
+        .detach();
+    }
+
+    pub fn new(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        settings: TerminalSettings,
+        on_window_deactivated: Option<Arc<dyn Fn() + Send + Sync>>,
+        on_hotkeys_updated: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
+    ) -> Self {
+        let (font, font_size, cell_size) = Self::resolve_font_and_cell_size(window, &settings);
+
+        let grid_size = Self::terminal_grid_for_viewport(window.viewport_size(), cell_size);
+        let window_size = Self::window_size_for_grid(grid_size, cell_size);
+        let first_terminal =
+            Self::spawn_terminal(&settings, window_size).expect("Failed to spawn terminal");
+        let first_events = first_terminal.events.clone();
+
+        let regex_searches = RegexSearches::new(
+            &settings.path_hyperlink_regexes,
+            settings.path_hyperlink_timeout_ms,
+        );
+        let focus_handle = cx.focus_handle();
+
+        let resize_subscription =
+            cx.observe_window_bounds(window, |this: &mut Self, window, cx| {
+                this.handle_resize(window, cx);
+            });
+        let on_hide_terminal_requested = on_window_deactivated.clone();
+        let auto_hide_on_outside_click = settings.auto_hide_on_outside_click;
+        let activation_subscription =
+            cx.observe_window_activation(window, move |this, window, cx| {
+                let window_is_active = window.is_window_active();
+                this.window_has_been_active = this.window_has_been_active || window_is_active;
+                Self::schedule_window_deactivation_hide(
+                    auto_hide_on_outside_click,
+                    window_is_active,
+                    this.window_has_been_active,
+                    on_window_deactivated.clone(),
+                    |on_window_deactivated| {
+                        cx.defer(move |_| {
+                            on_window_deactivated();
+                        });
+                    },
+                );
+            });
+
+        let view = TerminalView {
+            tabs: vec![TerminalTab {
+                id: 1,
+                number: 1,
+                title: "1".to_string(),
+                terminal: first_terminal,
+            }],
+            active_tab_id: 1,
+            hovered_tab_id: None,
+            next_tab_id: 2,
+            on_hide_terminal_requested,
+            on_hotkeys_updated,
             regex_searches,
             settings,
             focus_handle,
             font,
             font_size,
-            cell_size: Size {
-                width: cell_width,
-                height: line_height,
-            },
-            grid_size: Size {
-                width: initial_cols,
-                height: initial_lines,
-            },
+            cell_size,
+            grid_size,
             pending_scroll_lines: 0.0,
             suppress_precise_scroll_until: None,
             suppress_precise_scroll_until_ended: false,
             selection_anchor: None,
+            find_state: None,
+            settings_panel_open: false,
+            recording_global_hotkey: false,
+            window_has_been_active: false,
+            cursor_blink_visible: true,
+            suppress_cursor_blink_until: None,
+            settings_drawer_scroll_handle: ScrollHandle::new(),
             scrollbar_drag_offset: None,
             row_text_cache: Vec::new(),
             previous_frame: None,
             perf: PerfInstrumentation::from_env(),
             _resize_subscription: resize_subscription,
-        }
+            _activation_subscription: activation_subscription,
+        };
+        window.set_window_title(&view.active_window_title());
+        Self::spawn_terminal_event_loop(1, first_events, window, cx);
+        Self::spawn_cursor_blink_loop(window, cx);
+
+        view
     }
 
     fn mode_and_display_offset(&self) -> (TermMode, usize) {
-        let term = self.terminal.term.lock();
+        let term = self.active_terminal().term.lock();
         (*term.mode(), term.grid().display_offset())
     }
 
@@ -394,7 +1545,7 @@ impl TerminalView {
             self.cell_size.height,
             self.cell_size.width,
             Bounds {
-                origin: point(px(0.), px(0.)),
+                origin: point(px(0.), px(TAB_BAR_HEIGHT_PX)),
                 size: size(
                     self.cell_size.width * self.grid_size.width as f32,
                     self.cell_size.height * self.grid_size.height as f32,
@@ -404,7 +1555,7 @@ impl TerminalView {
     }
 
     fn scrollbar_layout(&self) -> Option<ScrollbarLayout> {
-        let term = self.terminal.term.lock();
+        let term = self.active_terminal().term.lock();
         if term.mode().contains(TermMode::ALT_SCREEN) {
             return None;
         }
@@ -418,7 +1569,7 @@ impl TerminalView {
     }
 
     fn set_display_offset(&mut self, target_offset: usize) -> bool {
-        let mut term = self.terminal.term.lock();
+        let mut term = self.active_terminal().term.lock();
         let max_offset = term.history_size();
         let clamped_target = target_offset.min(max_offset);
         let current_offset = term.grid().display_offset();
@@ -432,31 +1583,11 @@ impl TerminalView {
     }
 
     fn handle_resize(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let viewport = window.viewport_size();
-        let new_cols = (f32::from(viewport.width) / f32::from(self.cell_size.width)) as u16;
-        let new_lines = (f32::from(viewport.height) / f32::from(self.cell_size.height)) as u16;
-
-        if new_cols > 0
-            && new_lines > 0
-            && (new_cols != self.grid_size.width || new_lines != self.grid_size.height)
-        {
-            let window_size = WindowSize {
-                num_cols: new_cols,
-                num_lines: new_lines,
-                cell_width: f32::from(self.cell_size.width) as u16,
-                cell_height: f32::from(self.cell_size.height) as u16,
-            };
-            self.terminal.resize(window_size);
-            self.grid_size = Size {
-                width: new_cols,
-                height: new_lines,
-            };
-            cx.notify();
-        }
+        self.sync_grid_to_viewport(window, cx, false);
     }
 
     fn scroll_to_bottom(&mut self) -> bool {
-        let mut term = self.terminal.term.lock();
+        let mut term = self.active_terminal().term.lock();
         let was_scrolled = term.grid().display_offset() != 0;
         if was_scrolled {
             term.scroll_display(Scroll::Bottom);
@@ -464,15 +1595,418 @@ impl TerminalView {
         was_scrolled
     }
 
-    fn begin_terminal_input(&mut self) {
+    fn begin_terminal_input(&mut self, cx: &mut Context<Self>) {
         let was_scrolled = self.scroll_to_bottom();
+        let now = Instant::now();
         prepare_for_terminal_input(
             was_scrolled,
             &mut self.pending_scroll_lines,
             &mut self.suppress_precise_scroll_until,
             &mut self.suppress_precise_scroll_until_ended,
-            Instant::now(),
+            now,
         );
+        self.suppress_cursor_blink_until = Some(now + CURSOR_BLINK_SUPPRESSION_AFTER_INPUT);
+        if !self.cursor_blink_visible {
+            self.cursor_blink_visible = true;
+            self.previous_frame = None;
+            cx.notify();
+        }
+    }
+
+    fn cursor_blink_suppressed(&mut self, now: Instant) -> bool {
+        if cursor_blink_is_suppressed(self.suppress_cursor_blink_until, now) {
+            return true;
+        }
+
+        if self.suppress_cursor_blink_until.is_some() {
+            self.suppress_cursor_blink_until = None;
+        }
+
+        false
+    }
+
+    fn copy_selection_to_clipboard(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut term = self.active_terminal().term.lock();
+        let Some(text) = term.selection_to_string().filter(|text| !text.is_empty()) else {
+            return false;
+        };
+
+        let clear_selection = !self.settings.keep_selection_on_copy;
+        if clear_selection {
+            term.selection = None;
+        }
+        drop(term);
+
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        if clear_selection {
+            cx.notify();
+        }
+
+        true
+    }
+
+    fn select_all_terminal_content(&mut self) -> bool {
+        let mut term = self.active_terminal().term.lock();
+        if term.columns() == 0 || term.screen_lines() == 0 {
+            return false;
+        }
+
+        let start = AlacPoint::new(term.topmost_line(), Column(0));
+        let end = AlacPoint::new(term.bottommost_line(), term.last_column());
+        let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+        selection.update(end, Side::Right);
+        term.selection = Some(selection);
+        drop(term);
+        self.selection_anchor = None;
+
+        true
+    }
+
+    fn normalize_find_query(selection: &str) -> Option<String> {
+        selection
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToString::to_string)
+    }
+
+    fn regex_escape_literal(query: &str) -> String {
+        let mut escaped = String::with_capacity(query.len());
+        for ch in query.chars() {
+            match ch {
+                '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$'
+                | '|' => {
+                    escaped.push('\\');
+                    escaped.push(ch);
+                }
+                _ => escaped.push(ch),
+            }
+        }
+        escaped
+    }
+
+    fn collect_find_match_stats(
+        term: &alacritty_terminal::term::Term<simple_term::terminal::EventProxy>,
+        query: &str,
+        active: Option<FindMatch>,
+    ) -> (usize, Option<usize>) {
+        if query.is_empty() {
+            return (0, None);
+        }
+
+        let escaped = Self::regex_escape_literal(query);
+        let mut regex = match RegexSearch::new(&escaped) {
+            Ok(regex) => regex,
+            Err(err) => {
+                log::warn!("failed to build find regex for '{}': {err}", query);
+                return (0, None);
+            }
+        };
+
+        let mut origin = AlacPoint::new(term.topmost_line(), Column(0));
+        let mut count = 0usize;
+        let mut active_index = None;
+        let mut first_seen = None::<FindMatch>;
+
+        loop {
+            let Some(found_range) =
+                term.search_next(&mut regex, origin, AlacDirection::Right, Side::Right, None)
+            else {
+                break;
+            };
+
+            let found = FindMatch {
+                start: *found_range.start(),
+                end: *found_range.end(),
+            };
+            if first_seen.is_some() && first_seen == Some(found) {
+                break;
+            }
+
+            if first_seen.is_none() {
+                first_seen = Some(found);
+            }
+
+            count += 1;
+            if active == Some(found) {
+                active_index = Some(count);
+            }
+
+            let next_origin = found.end.add(term, Boundary::None, 1);
+            if next_origin == origin {
+                break;
+            }
+            origin = next_origin;
+        }
+
+        (count, active_index)
+    }
+
+    fn start_find(&mut self, cx: &mut Context<Self>) {
+        let selected_query = {
+            let term = self.active_terminal().term.lock();
+            term.selection_to_string()
+                .as_deref()
+                .and_then(Self::normalize_find_query)
+        };
+
+        if let Some(query) = selected_query {
+            self.find_state = Some(FindState {
+                query,
+                last_match: None,
+                match_count: 0,
+                active_match_index: None,
+            });
+        } else if self.find_state.is_none() {
+            self.find_state = Some(FindState::default());
+        } else if let Some(state) = self.find_state.as_mut() {
+            state.last_match = None;
+            state.active_match_index = None;
+        }
+
+        let has_query = self
+            .find_state
+            .as_ref()
+            .is_some_and(|state| !state.query.is_empty());
+        if has_query {
+            if !self.find_next_match(AlacDirection::Right, cx) {
+                cx.notify();
+            }
+            return;
+        }
+
+        cx.notify();
+    }
+
+    fn find_next_match(&mut self, direction: AlacDirection, cx: &mut Context<Self>) -> bool {
+        let query = match self
+            .find_state
+            .as_ref()
+            .map(|state| state.query.as_str())
+            .filter(|query| !query.is_empty())
+        {
+            Some(query) => query,
+            None => return false,
+        };
+
+        let escaped = Self::regex_escape_literal(query);
+        let mut regex = match RegexSearch::new(&escaped) {
+            Ok(regex) => regex,
+            Err(err) => {
+                log::warn!("failed to build find regex for '{}': {err}", query);
+                return false;
+            }
+        };
+
+        let previous_match = self.find_state.as_ref().and_then(|state| state.last_match);
+        let side = if matches!(direction, AlacDirection::Right) {
+            Side::Right
+        } else {
+            Side::Left
+        };
+
+        let mut term = self.active_terminal().term.lock();
+        if term.columns() == 0 || term.screen_lines() == 0 {
+            return false;
+        }
+
+        let origin = match previous_match {
+            Some(found) if matches!(direction, AlacDirection::Right) => {
+                found.end.add(&*term, Boundary::None, 1)
+            }
+            Some(found) => found.start.sub(&*term, Boundary::None, 1),
+            None => {
+                let display_offset = term.grid().display_offset() as i32;
+                AlacPoint::new(Line(-display_offset), Column(0))
+            }
+        };
+
+        let Some(found) = term.search_next(&mut regex, origin, direction, side, None) else {
+            drop(term);
+            if let Some(state) = self.find_state.as_mut() {
+                state.last_match = None;
+                state.match_count = 0;
+                state.active_match_index = None;
+            }
+            return false;
+        };
+
+        let start = *found.start();
+        let end = *found.end();
+        let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+        selection.update(end, Side::Right);
+        term.selection = Some(selection);
+
+        let display_offset = term.grid().display_offset() as i32;
+        let screen_lines = term.screen_lines() as i32;
+        let line = start.line.0;
+        let matched = FindMatch { start, end };
+        let (match_count, active_match_index) =
+            Self::collect_find_match_stats(&term, query, Some(matched));
+        drop(term);
+
+        if let Some(state) = self.find_state.as_mut() {
+            state.last_match = Some(matched);
+            state.match_count = match_count;
+            state.active_match_index = active_match_index;
+        }
+        self.selection_anchor = None;
+
+        let target_offset = if line + display_offset < 0 {
+            (-line) as usize
+        } else if line + display_offset >= screen_lines {
+            (screen_lines - 1 - line).max(0) as usize
+        } else {
+            display_offset.max(0) as usize
+        };
+        let _ = self.set_display_offset(target_offset);
+
+        cx.notify();
+        true
+    }
+
+    fn handle_find_keybinding(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        if self.find_state.is_none() {
+            return false;
+        }
+
+        let modifiers = event.keystroke.modifiers;
+        let key = event.keystroke.key.as_str();
+        if key == "escape" && !modifiers.platform && !modifiers.control && !modifiers.alt {
+            self.find_state = None;
+            cx.notify();
+            return true;
+        }
+
+        if key == "enter" && !modifiers.platform && !modifiers.control && !modifiers.alt {
+            let direction = if modifiers.shift {
+                AlacDirection::Left
+            } else {
+                AlacDirection::Right
+            };
+            let _ = self.find_next_match(direction, cx);
+            return true;
+        }
+
+        if key == "backspace" && !modifiers.platform && !modifiers.control && !modifiers.alt {
+            let should_search = if let Some(state) = self.find_state.as_mut() {
+                if state.query.pop().is_some() {
+                    state.last_match = None;
+                    state.active_match_index = None;
+                    !state.query.is_empty()
+                } else {
+                    state.match_count = 0;
+                    state.active_match_index = None;
+                    false
+                }
+            } else {
+                false
+            };
+
+            if should_search {
+                if !self.find_next_match(AlacDirection::Right, cx) {
+                    cx.notify();
+                }
+            } else {
+                cx.notify();
+            }
+            return true;
+        }
+
+        if let Some(text) = text_to_insert(&event.keystroke) {
+            if let Some(state) = self.find_state.as_mut() {
+                state.query.push_str(&text);
+                state.last_match = None;
+                state.active_match_index = None;
+            }
+            if !self.find_next_match(AlacDirection::Right, cx) {
+                cx.notify();
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn handle_common_shortcut(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Some(action) = common_shortcut_action(&event.keystroke) else {
+            return false;
+        };
+
+        match action {
+            CommonShortcutAction::CopySelection => {
+                let _ = self.copy_selection_to_clipboard(cx);
+            }
+            CommonShortcutAction::Paste => {
+                if let Some(item) = cx.read_from_clipboard() {
+                    if let Some(text) = item.text() {
+                        self.begin_terminal_input(cx);
+                        self.active_terminal().write_str(&text);
+                    }
+                }
+            }
+            CommonShortcutAction::SelectAll => {
+                if self.select_all_terminal_content() {
+                    cx.notify();
+                }
+            }
+            CommonShortcutAction::Find => self.start_find(cx),
+        }
+
+        true
+    }
+
+    fn handle_tab_keybinding(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let modifiers = event.keystroke.modifiers;
+        let key = event.keystroke.key.as_str();
+        if key == "tab" && modifiers.control {
+            let direction = if modifiers.shift { -1 } else { 1 };
+            self.set_active_tab_relative(direction, window, cx);
+            return true;
+        }
+
+        if !modifiers.platform {
+            return false;
+        }
+
+        match key {
+            "t" => {
+                self.create_tab(window, cx);
+                true
+            }
+            "w" => {
+                self.close_tab(self.active_tab_id, window, cx);
+                true
+            }
+            "[" => {
+                self.set_active_tab_relative(-1, window, cx);
+                true
+            }
+            "]" => {
+                self.set_active_tab_relative(1, window, cx);
+                true
+            }
+            "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => {
+                let index = key.parse::<usize>().ok().and_then(|n| n.checked_sub(1));
+                let Some(index) = index else {
+                    return false;
+                };
+                if index < self.tabs.len() {
+                    let tab_id = self.tabs[index].id;
+                    self.set_active_tab(tab_id, window, cx);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
     fn refresh_row_text_cache(
@@ -531,6 +2065,32 @@ fn is_monospace_font(text_system: &gpui::WindowTextSystem, font: &Font, font_siz
     (m - i).abs() <= tolerance && (m - w).abs() <= tolerance
 }
 
+fn cursor_should_blink(blinking: Blinking, terminal_blinking: bool) -> bool {
+    match blinking {
+        Blinking::Off => false,
+        Blinking::On => true,
+        Blinking::TerminalControlled => terminal_blinking,
+    }
+}
+
+fn cursor_blink_is_suppressed(suppress_until: Option<Instant>, now: Instant) -> bool {
+    matches!(suppress_until, Some(until) if now < until)
+}
+
+fn beam_cursor_width(cell_width: Pixels) -> Pixels {
+    px((f32::from(cell_width) * 0.14).clamp(1.0, 2.0))
+}
+
+fn underline_cursor_height(cell_height: Pixels) -> Pixels {
+    px((f32::from(cell_height) * 0.12).clamp(1.0, 2.0))
+}
+
+fn hollow_cursor_thickness(cell_size: Size<Pixels>) -> Pixels {
+    let max_thickness =
+        (f32::from(cell_size.width).min(f32::from(cell_size.height)) / 2.0).max(1.0);
+    px((f32::from(cell_size.width) * 0.1).clamp(1.0, max_thickness))
+}
+
 impl Focusable for TerminalView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -555,16 +2115,20 @@ struct TerminalSnapshot {
     display_offset: usize,
     cursor_row: Option<usize>,
     cursor_col: usize,
+    cursor_shape: CursorShape,
+    cursor_blinking: bool,
     show_cursor: bool,
+    cursor_draw_visible: bool,
     colors: ColorsSnapshot,
 }
 
-fn take_snapshot(terminal: &Terminal) -> (TerminalSnapshot, SnapshotTiming) {
+fn take_snapshot(terminal: &Terminal, theme: TerminalTheme) -> (TerminalSnapshot, SnapshotTiming) {
     let total_start = Instant::now();
     let term = terminal.term.lock();
     let lock_acquired_at = Instant::now();
     let content = term.renderable_content();
-    let colors = ColorsSnapshot::from_colors(content.colors);
+    let colors = ColorsSnapshot::from_colors(content.colors, theme);
+    let selection_tint = selection_tint_rgb(theme);
     let cursor = content.cursor;
     let selection = content.selection;
     let num_cols = term.columns();
@@ -599,7 +2163,7 @@ fn take_snapshot(terminal: &Terminal) -> (TerminalSnapshot, SnapshotTiming) {
 
             if let Some(ref sel) = selection {
                 if sel.contains(point) {
-                    std::mem::swap(&mut fg, &mut bg);
+                    bg = selection_background_color(&bg, &colors, selection_tint);
                 }
             }
 
@@ -614,6 +2178,8 @@ fn take_snapshot(terminal: &Terminal) -> (TerminalSnapshot, SnapshotTiming) {
 
     let cursor_row = viewport_row_for_line(cursor.point.line.0, display_offset, num_lines);
     let cursor_col = cursor.point.column.0;
+    let cursor_shape = cursor.shape;
+    let cursor_blinking = term.cursor_style().blinking;
     let show_cursor = cursor.shape != CursorShape::Hidden && cursor_row.is_some();
 
     let snapshot = TerminalSnapshot {
@@ -624,7 +2190,10 @@ fn take_snapshot(terminal: &Terminal) -> (TerminalSnapshot, SnapshotTiming) {
         display_offset,
         cursor_row,
         cursor_col,
+        cursor_shape,
+        cursor_blinking,
         show_cursor,
+        cursor_draw_visible: show_cursor,
         colors,
     };
     let lock_hold = lock_acquired_at.elapsed();
@@ -684,6 +2253,8 @@ fn dirty_rows_for_snapshot(
     if previous.show_cursor != snapshot.show_cursor
         || previous.cursor_row != snapshot.cursor_row
         || previous.cursor_col != snapshot.cursor_col
+        || previous.cursor_shape != snapshot.cursor_shape
+        || previous.cursor_draw_visible != snapshot.cursor_draw_visible
     {
         mark_row_dirty(&mut dirty_rows, previous.cursor_row);
         mark_row_dirty(&mut dirty_rows, snapshot.cursor_row);
@@ -727,7 +2298,14 @@ fn shift_row_cache_for_display_offset(
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (snapshot, snapshot_timing) = take_snapshot(&self.terminal);
+        let active_theme_palette = theme_palette(self.settings.theme);
+        let (mut snapshot, snapshot_timing) =
+            take_snapshot(self.active_terminal(), self.settings.theme);
+        let now = Instant::now();
+        let should_blink = cursor_should_blink(self.settings.blinking, snapshot.cursor_blinking)
+            && !self.cursor_blink_suppressed(now);
+        snapshot.cursor_draw_visible =
+            snapshot.show_cursor && (!should_blink || self.cursor_blink_visible);
         let previous_view = self
             .previous_frame
             .as_ref()
@@ -741,14 +2319,69 @@ impl Render for TerminalView {
         let row_text_cache = self.row_text_cache.clone();
         self.previous_frame = Some(FrameCache::from_snapshot(&snapshot));
 
+        let active_tab_id = self.active_tab_id;
+        let hovered_tab_id = self.hovered_tab_id;
+        let tab_count = self.tabs.len();
+        let has_multiple_tabs = tab_count > 1;
+        let viewport_width = window.viewport_size().width;
+        let find_panel_width = Self::find_panel_width_for_viewport(viewport_width);
+        let settings_drawer_width = Self::settings_drawer_width_for_viewport(viewport_width);
+        let settings_control_height = px(SETTINGS_CONTROL_HEIGHT_PX);
+        let ui_accent = tab_brand_purple(1.0);
+        let tabs_for_render = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| (tab.id, Self::tab_display_title(tab), index + 1 == tab_count))
+            .collect::<Vec<_>>();
+        let find_panel_state = self.find_state.as_ref().map(|state| {
+            let query_display = if state.query.is_empty() {
+                "Find".to_string()
+            } else {
+                state.query.chars().take(64).collect::<String>()
+            };
+            let count_label = match (state.active_match_index, state.match_count) {
+                (Some(active), total) if total > 0 => format!("{active}/{total}"),
+                _ => format!("0/{}", state.match_count),
+            };
+            (
+                query_display,
+                state.query.is_empty(),
+                count_label,
+                !state.query.is_empty() && state.match_count > 0,
+            )
+        });
+        let settings_panel_open = self.settings_panel_open;
+        let active_font_family_display = self.settings.font_family.clone();
+        let font_size_display = format!("{:.1}", self.settings.font_size);
+        let line_height_mode = Self::line_height_mode(&self.settings.line_height);
+        let line_height_display = Self::line_height_display(&self.settings.line_height);
+        let theme_display = Self::theme_label(self.settings.theme).to_string();
+        let scroll_multiplier_value =
+            Self::normalized_scroll_multiplier(self.settings.scroll_multiplier);
+        let scroll_multiplier_display = format!("{:.2}", scroll_multiplier_value);
+        let global_hotkey_display = self.settings.global_hotkey.clone();
+        let recording_global_hotkey = self.recording_global_hotkey;
+        let cursor_shape_display = match self.settings.cursor_shape {
+            SettingsCursorShape::Block => "block",
+            SettingsCursorShape::Underline => "underline",
+            SettingsCursorShape::Bar => "bar",
+            SettingsCursorShape::Hollow => "hollow",
+        };
+        let blinking_display = match self.settings.blinking {
+            Blinking::Off => "off",
+            Blinking::TerminalControlled => "terminal",
+            Blinking::On => "on",
+        };
+
         let cell_size = self.cell_size;
         let perf = self.perf.clone();
 
-        div()
-            .id("terminal")
+        let terminal_surface = div()
+            .id("terminal-surface")
             .track_focus(&self.focus_handle)
-            .size_full()
-            .bg(gpui::black())
+            .flex_1()
+            .bg(rgb(active_theme_palette.terminal_bg))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -774,7 +2407,7 @@ impl Render for TerminalView {
                     if event.modifiers.secondary() {
                         let point =
                             grid_point(event.position, this.terminal_bounds(), display_offset);
-                        let term_handle = this.terminal.term.clone();
+                        let term_handle = this.active_terminal().term.clone();
                         let term = term_handle.lock();
                         if let Some((target, is_url, _match)) = find_from_grid_point(
                             &term,
@@ -800,7 +2433,7 @@ impl Render for TerminalView {
                         if let Some(bytes) =
                             mouse_button_report(point, event.button, event.modifiers, true, mode)
                         {
-                            this.terminal.write(bytes);
+                            this.active_terminal().write(bytes);
                         }
                     } else {
                         let (point, side) = grid_point_and_side(
@@ -810,8 +2443,9 @@ impl Render for TerminalView {
                         );
                         this.selection_anchor = Some((point, side));
 
-                        let mut term = this.terminal.term.lock();
-                        term.selection = Some(Selection::new(SelectionType::Simple, point, side));
+                        let mut term = this.active_terminal().term.lock();
+                        let selection_type = selection_type_for_click_count(event.click_count);
+                        term.selection = Some(Selection::new(selection_type, point, side));
                         drop(term);
 
                         cx.notify();
@@ -828,7 +2462,7 @@ impl Render for TerminalView {
                         if let Some(bytes) =
                             mouse_button_report(point, event.button, event.modifiers, true, mode)
                         {
-                            this.terminal.write(bytes);
+                            this.active_terminal().write(bytes);
                         }
                     }
                 }),
@@ -843,7 +2477,7 @@ impl Render for TerminalView {
                         if let Some(bytes) =
                             mouse_button_report(point, event.button, event.modifiers, true, mode)
                         {
-                            this.terminal.write(bytes);
+                            this.active_terminal().write(bytes);
                         }
                     }
                 }),
@@ -863,7 +2497,7 @@ impl Render for TerminalView {
                         if let Some(bytes) =
                             mouse_button_report(point, event.button, event.modifiers, false, mode)
                         {
-                            this.terminal.write(bytes);
+                            this.active_terminal().write(bytes);
                         }
                     } else if this.selection_anchor.is_some() {
                         let (point, side) = grid_point_and_side(
@@ -871,7 +2505,7 @@ impl Render for TerminalView {
                             this.terminal_bounds(),
                             display_offset,
                         );
-                        let mut term = this.terminal.term.lock();
+                        let mut term = this.active_terminal().term.lock();
                         if let Some(selection) = term.selection.as_mut() {
                             selection.update(point, side);
                         }
@@ -907,7 +2541,7 @@ impl Render for TerminalView {
                         if let Some(bytes) =
                             mouse_button_report(point, event.button, event.modifiers, false, mode)
                         {
-                            this.terminal.write(bytes);
+                            this.active_terminal().write(bytes);
                         }
                     }
                 }),
@@ -922,7 +2556,7 @@ impl Render for TerminalView {
                         if let Some(bytes) =
                             mouse_button_report(point, event.button, event.modifiers, false, mode)
                         {
-                            this.terminal.write(bytes);
+                            this.active_terminal().write(bytes);
                         }
                     }
                 }),
@@ -950,7 +2584,7 @@ impl Render for TerminalView {
                     if let Some(bytes) =
                         mouse_moved_report(point, event.pressed_button, event.modifiers, mode)
                     {
-                        this.terminal.write(bytes);
+                        this.active_terminal().write(bytes);
                     }
                 } else if event.pressed_button == Some(MouseButton::Left) {
                     let Some((anchor_point, anchor_side)) = this.selection_anchor else {
@@ -960,7 +2594,7 @@ impl Render for TerminalView {
                     let (point, side) =
                         grid_point_and_side(event.position, this.terminal_bounds(), display_offset);
 
-                    let mut term = this.terminal.term.lock();
+                    let mut term = this.active_terminal().term.lock();
                     if let Some(selection) = term.selection.as_mut() {
                         selection.update(point, side);
                     } else {
@@ -998,7 +2632,7 @@ impl Render for TerminalView {
                     let point = grid_point(event.position, this.terminal_bounds(), display_offset);
                     if let Some(reports) = scroll_report(point, delta, event, mode) {
                         for bytes in reports {
-                            this.terminal.write(bytes);
+                            this.active_terminal().write(bytes);
                         }
                     }
                 } else if alternate_scroll_enabled(
@@ -1006,49 +2640,60 @@ impl Render for TerminalView {
                     this.settings.alternate_scroll,
                     event.modifiers.shift,
                 ) {
-                    this.terminal.write(alt_scroll(delta));
+                    this.active_terminal().write(alt_scroll(delta));
                 } else {
-                    this.terminal
+                    this.active_terminal()
                         .term
                         .lock()
                         .scroll_display(Scroll::Delta(delta));
                 }
 
-                // Ensure local scroll actions repaint immediately.
                 cx.notify();
             }))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _window, cx| {
-                // Cmd+V: paste from clipboard
-                if event.keystroke.modifiers.platform && event.keystroke.key == "v" {
-                    if let Some(item) = cx.read_from_clipboard() {
-                        if let Some(text) = item.text() {
-                            this.begin_terminal_input();
-                            this.terminal.write_str(&text);
-                        }
-                    }
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if this.handle_global_hotkey_recording(event, cx) {
+                    return;
+                }
+
+                if this.handle_tab_keybinding(event, window, cx) {
+                    return;
+                }
+
+                if this.settings_panel_open
+                    && Self::should_close_settings_panel_for_keystroke(&event.keystroke)
+                {
+                    this.settings_panel_open = false;
+                    this.recording_global_hotkey = false;
+                    cx.notify();
+                    return;
+                }
+
+                if this.handle_find_keybinding(event, cx) {
+                    return;
+                }
+
+                if this.handle_common_shortcut(event, cx) {
                     return;
                 }
 
                 let mode = {
-                    let term = this.terminal.term.lock();
+                    let term = this.active_terminal().term.lock();
                     *term.mode()
                 };
 
-                // Try escape sequence mapping first
                 if let Some(esc) = simple_term::mappings::keys::to_esc_str(
                     &event.keystroke,
                     &mode,
                     this.settings.option_as_meta,
                 ) {
-                    this.begin_terminal_input();
-                    this.terminal.write(esc.as_bytes().to_vec());
+                    this.begin_terminal_input(cx);
+                    this.active_terminal().write(esc.as_bytes().to_vec());
                     return;
                 }
 
-                // Regular text input
                 if let Some(text) = text_to_insert(&event.keystroke) {
-                    this.begin_terminal_input();
-                    this.terminal.write(text.as_bytes().to_vec());
+                    this.begin_terminal_input(cx);
+                    this.active_terminal().write(text.as_bytes().to_vec());
                 }
             }))
             .child(
@@ -1070,11 +2715,11 @@ impl Render for TerminalView {
                             snapshot.display_offset,
                         );
 
-                        // Paint phase
                         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                            // Paint all rows each frame. GPUI's canvas does not guarantee
-                            // persistence of previously drawn pixels across frames.
-                            window.paint_quad(fill(content_bounds, gpui::black()));
+                            window.paint_quad(fill(
+                                content_bounds,
+                                rgb(active_theme_palette.terminal_bg),
+                            ));
                             for (row_idx, cached_row) in row_text_cache.iter().enumerate() {
                                 for span in cached_row.background_spans.iter() {
                                     let span_bounds = Bounds {
@@ -1092,7 +2737,6 @@ impl Render for TerminalView {
                                 }
                             }
 
-                            // Paint pre-shaped text runs anchored to terminal columns.
                             for (row_idx, cached_row) in row_text_cache.iter().enumerate() {
                                 for run in cached_row.text_runs.iter() {
                                     let origin = point(
@@ -1103,10 +2747,11 @@ impl Render for TerminalView {
                                 }
                             }
 
-                            // Paint cursor on top of text.
-                            if snapshot.show_cursor && snapshot.cursor_col < snapshot.num_cols {
+                            if snapshot.cursor_draw_visible
+                                && snapshot.cursor_col < snapshot.num_cols
+                            {
                                 if let Some(cursor_row) = snapshot.cursor_row {
-                                    let cursor_bounds = Bounds {
+                                    let cell_bounds = Bounds {
                                         origin: point(
                                             bounds.origin.x
                                                 + cell_size.width * snapshot.cursor_col as f32,
@@ -1114,13 +2759,81 @@ impl Render for TerminalView {
                                         ),
                                         size: size(cell_size.width, cell_size.height),
                                     };
-                                    window.paint_quad(fill(cursor_bounds, hsla(0., 0., 0.8, 0.7)));
+                                    match snapshot.cursor_shape {
+                                        CursorShape::Beam => {
+                                            let width = beam_cursor_width(cell_size.width);
+                                            let cursor_bounds = Bounds {
+                                                origin: cell_bounds.origin,
+                                                size: size(width, cell_size.height),
+                                            };
+                                            window.paint_quad(fill(
+                                                cursor_bounds,
+                                                rgb(active_theme_palette.cursor),
+                                            ));
+                                        }
+                                        CursorShape::Underline => {
+                                            let height = underline_cursor_height(cell_size.height);
+                                            let cursor_bounds = Bounds {
+                                                origin: point(
+                                                    cell_bounds.origin.x,
+                                                    cell_bounds.origin.y + cell_size.height
+                                                        - height,
+                                                ),
+                                                size: size(cell_size.width, height),
+                                            };
+                                            window.paint_quad(fill(
+                                                cursor_bounds,
+                                                rgb(active_theme_palette.cursor),
+                                            ));
+                                        }
+                                        CursorShape::HollowBlock => {
+                                            let stroke = hollow_cursor_thickness(cell_size);
+                                            let color = rgb(active_theme_palette.cursor);
+                                            let top = Bounds {
+                                                origin: cell_bounds.origin,
+                                                size: size(cell_bounds.size.width, stroke),
+                                            };
+                                            let bottom = Bounds {
+                                                origin: point(
+                                                    cell_bounds.origin.x,
+                                                    cell_bounds.origin.y + cell_bounds.size.height
+                                                        - stroke,
+                                                ),
+                                                size: size(cell_bounds.size.width, stroke),
+                                            };
+                                            let left = Bounds {
+                                                origin: cell_bounds.origin,
+                                                size: size(stroke, cell_bounds.size.height),
+                                            };
+                                            let right = Bounds {
+                                                origin: point(
+                                                    cell_bounds.origin.x + cell_bounds.size.width
+                                                        - stroke,
+                                                    cell_bounds.origin.y,
+                                                ),
+                                                size: size(stroke, cell_bounds.size.height),
+                                            };
+                                            window.paint_quad(fill(top, color));
+                                            window.paint_quad(fill(bottom, color));
+                                            window.paint_quad(fill(left, color));
+                                            window.paint_quad(fill(right, color));
+                                        }
+                                        _ => {
+                                            window.paint_quad(fill(
+                                                cell_bounds,
+                                                rgb(active_theme_palette.cursor),
+                                            ));
+                                        }
+                                    }
                                 }
                             }
 
                             if let Some(layout) = &scrollbar {
-                                window.paint_quad(fill(layout.track, hsla(0.0, 0.0, 0.25, 0.35)));
-                                window.paint_quad(fill(layout.thumb, hsla(0.0, 0.0, 0.65, 0.8)));
+                                window.paint_quad(fill(layout.track, hsla(0.0, 0.0, 0.0, 0.0)));
+                                window.paint_quad(fill(
+                                    layout.thumb,
+                                    hsla(223.0 / 360.0, 0.14, 0.34, 0.6),
+                                ));
                             }
                         });
 
@@ -1134,7 +2847,1616 @@ impl Render for TerminalView {
                     },
                 )
                 .size_full(),
+            );
+
+        let tab_bar = div()
+            .id("tab-bar")
+            .h(px(TAB_BAR_HEIGHT_PX))
+            .w_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .bg(rgb(active_theme_palette.ui_bg))
+            .border_b_1()
+            .border_color(hsla(0.0, 0.0, 1.0, 0.06))
+            .child(
+                div()
+                    .w(px(TAB_BAR_LEFT_DRAG_WIDTH_PX))
+                    .flex_none()
+                    .h_full()
+                    .window_control_area(WindowControlArea::Drag)
+                    .border_r_1()
+                    .border_color(hsla(0.0, 0.0, 1.0, 0.06)),
             )
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .overflow_x_hidden()
+                    .child(
+                        div()
+                            .id("tab-items-scroll")
+                            .h_full()
+                            .w_full()
+                            .flex()
+                            .flex_row()
+                            .items_end()
+                            .justify_start()
+                            .gap_2()
+                            .px_3()
+                            .overflow_x_scroll()
+                            .scrollbar_width(px(0.0))
+                            .children(tabs_for_render.into_iter().map(
+                                |(tab_id, tab_title, is_last)| {
+                                    let is_active = tab_id == active_tab_id;
+                                    let is_hovered = hovered_tab_id == Some(tab_id);
+                                    let show_close_button = is_hovered && tab_count > 1;
+                                    div()
+                                        .flex_none()
+                                        .h_full()
+                                        .w(px(TAB_ITEM_WIDTH_PX))
+                                        .flex()
+                                        .flex_col()
+                                        .justify_end()
+                                        .child(
+                                            div()
+                                                .id(("tab-item", tab_id))
+                                                .h(px(TAB_ITEM_HEIGHT_PX))
+                                                .px_3()
+                                                .flex()
+                                                .flex_row()
+                                                .items_center()
+                                                .when(!is_last, |this| {
+                                                    this.border_r_1()
+                                                        .border_color(hsla(0.0, 0.0, 1.0, 0.06))
+                                                })
+                                                .cursor_pointer()
+                                                .bg(hsla(0.0, 0.0, 1.0, 0.0))
+                                                .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                                .on_hover(cx.listener(
+                                                    move |this,
+                                                          is_hovered_event: &bool,
+                                                          _window,
+                                                          cx| {
+                                                        let next = Self::hovered_tab_id_after_event(
+                                                            this.hovered_tab_id,
+                                                            tab_id,
+                                                            *is_hovered_event,
+                                                        );
+                                                        if next != this.hovered_tab_id {
+                                                            this.hovered_tab_id = next;
+                                                            cx.notify();
+                                                        }
+                                                    },
+                                                ))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        move |this,
+                                                              _event: &MouseDownEvent,
+                                                              window,
+                                                              cx| {
+                                                            this.set_active_tab(tab_id, window, cx);
+                                                        },
+                                                    ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .w_full()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .truncate()
+                                                                .id(("tab-title", tab_id))
+                                                                .tooltip({
+                                                                    let tab_title = tab_title.clone();
+                                                                    move |_window, cx| {
+                                                                        cx.new({
+                                                                            let tab_title = tab_title.clone();
+                                                                            move |_cx| TabTitleTooltip {
+                                                                                title: tab_title.clone().into(),
+                                                                            }
+                                                                        })
+                                                                        .into()
+                                                                    }
+                                                                })
+                                                                .text_xs()
+                                                                .text_color(if is_active {
+                                                                    hsla(0.0, 0.0, 1.0, 0.9)
+                                                                } else {
+                                                                    hsla(0.0, 0.0, 1.0, 0.5)
+                                                                })
+                                                                .child(tab_title),
+                                                        )
+                                                        .when(show_close_button, |this| {
+                                                            this.child(
+                                                                div()
+                                                                    .id(("tab-close", tab_id))
+                                                                    .h(px(TAB_CLOSE_BUTTON_SIZE_PX))
+                                                                    .w(px(TAB_CLOSE_BUTTON_SIZE_PX))
+                                                                    .flex_none()
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .justify_center()
+                                                                    .rounded_sm()
+                                                                    .bg(hsla(0.0, 0.0, 0.0, 0.42))
+                                                                    .border_1()
+                                                                    .border_color(hsla(0.0, 0.0, 1.0, 0.08))
+                                                                    .text_sm()
+                                                                    .text_color(hsla(0.0, 0.0, 1.0, 0.84))
+                                                                    .cursor_pointer()
+                                                                    .hover(|style| {
+                                                                        style
+                                                                            .bg(tab_brand_purple(1.0))
+                                                                            .border_color(tab_brand_purple(0.9))
+                                                                            .text_color(hsla(0.0, 0.0, 1.0, 0.94))
+                                                                    })
+                                                                    .on_mouse_down(
+                                                                        MouseButton::Left,
+                                                                        cx.listener(
+                                                                            move |this,
+                                                                                  _event: &MouseDownEvent,
+                                                                                  window,
+                                                                                  cx| {
+                                                                                cx.stop_propagation();
+                                                                                this.close_tab(tab_id, window, cx);
+                                                                            },
+                                                                        ),
+                                                                    )
+                                                                    .child("✕"),
+                                                            )
+                                                        }),
+                                                ),
+                                        )
+                                        .child(
+                                            div().h(px(TAB_ITEM_INDICATOR_HEIGHT_PX)).w_full().bg(if is_active {
+                                                ui_accent
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            }),
+                                        )
+                                        .child(div().h(px(TAB_ITEM_INDICATOR_BOTTOM_GAP_PX)).w_full())
+                                },
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .h_full()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .border_l_1()
+                    .border_color(hsla(0.0, 0.0, 1.0, 0.06))
+                    .when(find_panel_state.is_some(), |this| {
+                        let (query_display, is_placeholder, count_label, has_match) =
+                            find_panel_state
+                                .clone()
+                                .unwrap_or_else(|| (String::new(), true, "0/0".to_string(), false));
+                        let hint = if is_placeholder {
+                            "Type to search"
+                        } else {
+                            "Enter next  Shift+Enter prev  Esc close"
+                        };
+                        this.child(
+                            div()
+                                .h(px(TAB_ITEM_HEIGHT_PX))
+                                .w(find_panel_width)
+                                .max_w(find_panel_width)
+                                .gap_2()
+                                .flex()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .h(px(TAB_ITEM_HEIGHT_PX))
+                                        .flex_1()
+                                        .px_3()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_between()
+                                        .rounded_lg()
+                                        .border_1()
+                                        .border_color(hsla(0.0, 0.0, 1.0, 0.14))
+                                        .bg(hsla(0.0, 0.0, 0.0, 0.75))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .truncate()
+                                                .text_sm()
+                                                .text_color(if is_placeholder {
+                                                    hsla(0.0, 0.0, 1.0, 0.38)
+                                                } else {
+                                                    hsla(0.0, 0.0, 1.0, 0.82)
+                                                })
+                                                .child(query_display),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(hsla(0.0, 0.0, 1.0, 0.54))
+                                                .child(hint),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(hsla(0.0, 0.0, 1.0, 0.58))
+                                        .child(count_label),
+                                )
+                                .child(
+                                    div()
+                                        .h(px(TAB_ITEM_HEIGHT_PX))
+                                        .w(px(24.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_sm()
+                                        .text_sm()
+                                        .text_color(if has_match {
+                                            hsla(0.0, 0.0, 1.0, 0.72)
+                                        } else {
+                                            hsla(0.0, 0.0, 1.0, 0.26)
+                                        })
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                let _ = this.find_next_match(AlacDirection::Right, cx);
+                                            }),
+                                        )
+                                        .child("↓"),
+                                )
+                                .child(
+                                    div()
+                                        .h(px(TAB_ITEM_HEIGHT_PX))
+                                        .w(px(24.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_sm()
+                                        .text_sm()
+                                        .text_color(if has_match {
+                                            hsla(0.0, 0.0, 1.0, 0.72)
+                                        } else {
+                                            hsla(0.0, 0.0, 1.0, 0.26)
+                                        })
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                let _ = this.find_next_match(AlacDirection::Left, cx);
+                                            }),
+                                        )
+                                        .child("↑"),
+                                )
+                                .child(
+                                    div()
+                                        .h(px(TAB_ITEM_HEIGHT_PX))
+                                        .w(px(24.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_sm()
+                                        .text_sm()
+                                        .text_color(hsla(0.0, 0.0, 1.0, 0.68))
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                this.find_state = None;
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child("✕"),
+                                ),
+                        )
+                    })
+                    .when(find_panel_state.is_none(), |this| {
+                        this.child(
+                        div()
+                            .h(px(TAB_ITEM_HEIGHT_PX))
+                            .w(px(TAB_ADD_BUTTON_WIDTH_PX))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .bg(hsla(0.0, 0.0, 1.0, 0.0))
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .text_color(hsla(0.0, 0.0, 1.0, 0.4))
+                            .text_lg()
+                            .cursor_pointer()
+                            .text_center()
+                            .hover(|style| {
+                                style
+                                    .bg(tab_brand_purple(0.22))
+                                    .border_color(tab_brand_purple(0.9))
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.92))
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                    this.create_tab(window, cx);
+                                }),
+                            )
+                            .child("+"),
+                    )
+                    .child(
+                        div()
+                            .h(px(TAB_ITEM_HEIGHT_PX))
+                            .w(px(TAB_DROPDOWN_BUTTON_WIDTH_PX))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .bg(hsla(0.0, 0.0, 1.0, 0.0))
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .text_xs()
+                            .text_color(if has_multiple_tabs {
+                                hsla(0.0, 0.0, 1.0, 0.4)
+                            } else {
+                                hsla(0.0, 0.0, 1.0, 0.2)
+                            })
+                            .opacity(if has_multiple_tabs { 1.0 } else { 0.65 })
+                            .cursor_default()
+                            .text_center()
+                            .when(has_multiple_tabs, |this| {
+                                this.cursor_pointer().hover(|style| {
+                                    style
+                                        .bg(tab_brand_purple(0.22))
+                                        .border_color(tab_brand_purple(0.9))
+                                        .text_color(hsla(0.0, 0.0, 1.0, 0.92))
+                                })
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                                    if has_multiple_tabs {
+                                        this.set_active_tab_relative(1, window, cx);
+                                    }
+                                }),
+                            )
+                            .child("▾"),
+                    )
+                    })
+                    .child(
+                        div()
+                            .h(px(TAB_ITEM_HEIGHT_PX))
+                            .w(px(SETTINGS_BUTTON_WIDTH_PX))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .bg(hsla(0.0, 0.0, 1.0, 0.0))
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .text_sm()
+                            .text_color(hsla(0.0, 0.0, 1.0, 0.5))
+                            .cursor_pointer()
+                            .text_center()
+                            .hover(|style| {
+                                style
+                                    .bg(tab_brand_purple(0.22))
+                                    .border_color(tab_brand_purple(0.9))
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.92))
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                    this.toggle_settings_panel(cx);
+                                }),
+                            )
+                            .child(if settings_panel_open { "✕" } else { "⚙︎" }),
+                    )
+            );
+
+        let line_height_custom_enabled = line_height_mode == SettingsLineHeightMode::Custom;
+        let line_height_comfortable_active =
+            line_height_mode == SettingsLineHeightMode::Comfortable;
+        let line_height_standard_active = line_height_mode == SettingsLineHeightMode::Standard;
+        let line_height_custom_active = line_height_mode == SettingsLineHeightMode::Custom;
+        let line_height_custom_display = if line_height_custom_enabled {
+            line_height_display.clone()
+        } else {
+            "--".to_string()
+        };
+        let keep_selection_enabled = self.settings.copy_on_select;
+        let settings_drawer_scrollbar_metrics = self.settings_drawer_scrollbar_metrics();
+        let mut settings_drawer = div()
+            .id("settings-popup")
+            .w(settings_drawer_width)
+            .max_w(settings_drawer_width)
+            .h_full()
+            .min_h(px(0.0))
+            .relative()
+            .flex()
+            .flex_col()
+            .occlude()
+            .rounded_lg()
+            .bg(hsla(0.0, 0.0, 0.0, 0.82))
+            .border_1()
+            .border_color(hsla(0.0, 0.0, 1.0, 0.08))
+            .child(
+                div()
+                    .h(px(SETTINGS_DRAWER_HEADER_HEIGHT_PX))
+                    .w_full()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(hsla(0.0, 0.0, 1.0, 0.08))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(hsla(0.0, 0.0, 1.0, 0.86))
+                            .child("Terminal Settings"),
+                    )
+                    .child(
+                        div()
+                            .h(px(22.0))
+                            .w(px(22.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .text_xs()
+                            .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                    this.settings_panel_open = false;
+                                    this.recording_global_hotkey = false;
+                                    cx.notify();
+                                }),
+                            )
+                            .child("✕"),
+                    ),
+            )
+            .child(
+                div()
+                    .id("settings-popup-scroll")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .p_3()
+                    .pr(px(SETTINGS_DRAWER_SCROLL_CONTENT_PADDING_RIGHT_PX))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .overflow_y_scroll()
+                    .scrollbar_width(Self::settings_drawer_scrollbar_width())
+                    .track_scroll(&self.settings_drawer_scroll_handle)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(hsla(0.0, 0.0, 1.0, 0.46))
+                            .child("Appearance"),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Theme"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .h(settings_control_height)
+                                            .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.cycle_theme(-1, cx);
+                                                }),
+                                            )
+                                            .child("<"),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(126.0))
+                                            .truncate()
+                                            .text_center()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.84))
+                                            .child(theme_display),
+                                    )
+                                    .child(
+                                        div()
+                                            .h(settings_control_height)
+                                            .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.cycle_theme(1, cx);
+                                                }),
+                                            )
+                                            .child(">"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Font Family"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .h(settings_control_height)
+                                            .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                    this.cycle_font_family(-1, window, cx);
+                                                }),
+                                            )
+                                            .child("<"),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(126.0))
+                                            .truncate()
+                                            .text_center()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.84))
+                                            .child(active_font_family_display),
+                                    )
+                                    .child(
+                                        div()
+                                            .h(settings_control_height)
+                                            .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                    this.cycle_font_family(1, window, cx);
+                                                }),
+                                            )
+                                            .child(">"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Font Size"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .h(settings_control_height)
+                                            .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                    this.adjust_font_size(-SETTINGS_FONT_SIZE_STEP, window, cx);
+                                                }),
+                                            )
+                                            .child("-"),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(64.0))
+                                            .text_center()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.84))
+                                            .child(font_size_display),
+                                    )
+                                    .child(
+                                        div()
+                                            .h(settings_control_height)
+                                            .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                    this.adjust_font_size(SETTINGS_FONT_SIZE_STEP, window, cx);
+                                                }),
+                                            )
+                                            .child("+"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Line Height"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if line_height_comfortable_active {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                    this.set_line_height_mode(
+                                                        SettingsLineHeightMode::Comfortable,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child("comfortable"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if line_height_standard_active {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                    this.set_line_height_mode(
+                                                        SettingsLineHeightMode::Standard,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child("standard"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if line_height_custom_active {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                                    this.set_line_height_mode(
+                                                        SettingsLineHeightMode::Custom,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child("custom"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(if line_height_custom_enabled {
+                                                hsla(0.0, 0.0, 1.0, 0.72)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.38)
+                                            })
+                                            .child("Custom"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .h(settings_control_height)
+                                                    .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded_sm()
+                                                    .text_xs()
+                                                    .text_color(if line_height_custom_enabled {
+                                                        hsla(0.0, 0.0, 1.0, 0.78)
+                                                    } else {
+                                                        hsla(0.0, 0.0, 1.0, 0.34)
+                                                    })
+                                                    .cursor_default()
+                                                    .when(line_height_custom_enabled, |this| {
+                                                        this.cursor_pointer()
+                                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(
+                                                                    |this, _event: &MouseDownEvent, window, cx| {
+                                                                        this.adjust_line_height_custom(
+                                                                            -SETTINGS_LINE_HEIGHT_STEP,
+                                                                            window,
+                                                                            cx,
+                                                                        );
+                                                                    },
+                                                                ),
+                                                            )
+                                                    })
+                                                    .child("-"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(48.0))
+                                                    .text_center()
+                                                    .text_xs()
+                                                    .text_color(if line_height_custom_enabled {
+                                                        hsla(0.0, 0.0, 1.0, 0.84)
+                                                    } else {
+                                                        hsla(0.0, 0.0, 1.0, 0.38)
+                                                    })
+                                                    .child(line_height_custom_display),
+                                            )
+                                            .child(
+                                                div()
+                                                    .h(settings_control_height)
+                                                    .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded_sm()
+                                                    .text_xs()
+                                                    .text_color(if line_height_custom_enabled {
+                                                        hsla(0.0, 0.0, 1.0, 0.78)
+                                                    } else {
+                                                        hsla(0.0, 0.0, 1.0, 0.34)
+                                                    })
+                                                    .cursor_default()
+                                                    .when(line_height_custom_enabled, |this| {
+                                                        this.cursor_pointer()
+                                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(
+                                                                    |this, _event: &MouseDownEvent, window, cx| {
+                                                                        this.adjust_line_height_custom(
+                                                                            SETTINGS_LINE_HEIGHT_STEP,
+                                                                            window,
+                                                                            cx,
+                                                                        );
+                                                                    },
+                                                                ),
+                                                            )
+                                                    })
+                                                    .child("+"),
+                                            ),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Cursor Shape"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.cursor_shape == SettingsCursorShape::Block {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_cursor_shape_setting(SettingsCursorShape::Block, cx);
+                                                }),
+                                            )
+                                            .child("block"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.cursor_shape == SettingsCursorShape::Underline {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_cursor_shape_setting(
+                                                        SettingsCursorShape::Underline,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child("underline"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.cursor_shape == SettingsCursorShape::Bar {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_cursor_shape_setting(SettingsCursorShape::Bar, cx);
+                                                }),
+                                            )
+                                            .child("bar"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.cursor_shape == SettingsCursorShape::Hollow {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_cursor_shape_setting(SettingsCursorShape::Hollow, cx);
+                                                }),
+                                            )
+                                            .child("hollow"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Blinking"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.blinking == Blinking::Off {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_blinking_setting(Blinking::Off, cx);
+                                                }),
+                                            )
+                                            .child("off"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.blinking == Blinking::TerminalControlled {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_blinking_setting(Blinking::TerminalControlled, cx);
+                                                }),
+                                            )
+                                            .child("terminal"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.blinking == Blinking::On {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_blinking_setting(Blinking::On, cx);
+                                                }),
+                                            )
+                                            .child("on"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(hsla(0.0, 0.0, 1.0, 0.46))
+                            .child("Behavior"),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Copy On Select"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.copy_on_select {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_copy_on_select(true, cx);
+                                                }),
+                                            )
+                                            .child("on"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if !self.settings.copy_on_select {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_copy_on_select(false, cx);
+                                                }),
+                                            )
+                                            .child("off"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Keep Selection On Copy"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.keep_selection_on_copy {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(if keep_selection_enabled {
+                                                hsla(0.0, 0.0, 1.0, 0.78)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.36)
+                                            })
+                                            .cursor_default()
+                                            .when(keep_selection_enabled, |this| {
+                                                this.cursor_pointer().on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        |this, _event: &MouseDownEvent, _window, cx| {
+                                                            this.set_keep_selection_on_copy(true, cx);
+                                                        },
+                                                    ),
+                                                )
+                                            })
+                                            .child("on"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if !self.settings.keep_selection_on_copy {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(if keep_selection_enabled {
+                                                hsla(0.0, 0.0, 1.0, 0.78)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.36)
+                                            })
+                                            .cursor_default()
+                                            .when(keep_selection_enabled, |this| {
+                                                this.cursor_pointer().on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        |this, _event: &MouseDownEvent, _window, cx| {
+                                                            this.set_keep_selection_on_copy(false, cx);
+                                                        },
+                                                    ),
+                                                )
+                                            })
+                                            .child("off"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Option As Meta"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if self.settings.option_as_meta {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_option_as_meta(true, cx);
+                                                }),
+                                            )
+                                            .child("on"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if !self.settings.option_as_meta {
+                                                hsla(0.0, 0.0, 1.0, 0.12)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_option_as_meta(false, cx);
+                                                }),
+                                            )
+                                            .child("off"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Scroll Multiplier"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .h(settings_control_height)
+                                            .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.adjust_scroll_multiplier(
+                                                        -SETTINGS_SCROLL_MULTIPLIER_STEP,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child("-"),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(64.0))
+                                            .text_center()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.84))
+                                            .child(scroll_multiplier_display),
+                                    )
+                                    .child(
+                                        div()
+                                            .h(settings_control_height)
+                                            .w(px(SETTINGS_NUMERIC_BUTTON_WIDTH_PX))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.adjust_scroll_multiplier(
+                                                        SETTINGS_SCROLL_MULTIPLIER_STEP,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child("+"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.72))
+                                    .child("Show/Hide Shortcut"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .w(px(168.0))
+                                            .text_center()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.84))
+                                            .child(if recording_global_hotkey {
+                                                "Press shortcut...".to_string()
+                                            } else {
+                                                global_hotkey_display.clone()
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .h(settings_control_height)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(hsla(0.0, 0.0, 1.0, 0.78))
+                                            .cursor_pointer()
+                                            .border_1()
+                                            .border_color(hsla(0.0, 0.0, 1.0, 0.18))
+                                            .bg(if recording_global_hotkey {
+                                                hsla(0.0, 0.0, 1.0, 0.16)
+                                            } else {
+                                                hsla(0.0, 0.0, 1.0, 0.0)
+                                            })
+                                            .hover(|style| {
+                                                style
+                                                    .bg(tab_brand_purple(0.22))
+                                                    .border_color(tab_brand_purple(0.9))
+                                            })
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                                    this.set_global_hotkey_recording(
+                                                        !this.recording_global_hotkey,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child(if recording_global_hotkey {
+                                                "cancel"
+                                            } else {
+                                                "record"
+                                            }),
+                                    ),
+                            ),
+                    )
+                    .child(div().text_xs().text_color(hsla(0.0, 0.0, 1.0, 0.46)).child("Advanced"))
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(hsla(0.0, 0.0, 1.0, 0.12))
+                            .text_xs()
+                            .text_color(hsla(0.0, 0.0, 1.0, 0.46))
+                            .child(format!(
+                                "Cursor: {}  •  Blinking: {}",
+                                cursor_shape_display, blinking_display
+                            ))
+                            .child(
+                                div()
+                                    .mt_1()
+                                    .child("Advanced options are available in settings.json"),
+                            )
+                            .child(
+                                div()
+                                    .mt_1()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.56))
+                                    .child(
+                                        "Includes shell, working directory, env, path regexes, and pin hotkey.",
+                                    ),
+                            ),
+                    ),
+            );
+
+        if let Some((thumb_top, thumb_height)) = settings_drawer_scrollbar_metrics {
+            settings_drawer = settings_drawer.child(
+                div()
+                    .absolute()
+                    .top(px(SETTINGS_DRAWER_HEADER_HEIGHT_PX))
+                    .bottom(px(0.0))
+                    .right(px(SETTINGS_DRAWER_SCROLLBAR_TRACK_INSET_PX))
+                    .w(px(SETTINGS_DRAWER_SCROLLBAR_TRACK_WIDTH_PX))
+                    .rounded_sm()
+                    .bg(hsla(0.0, 0.0, 1.0, 0.1))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(0.0))
+                            .right(px(0.0))
+                            .top(thumb_top)
+                            .h(thumb_height)
+                            .rounded_sm()
+                            .bg(hsla(0.0, 0.0, 1.0, 0.46)),
+                    ),
+            );
+        }
+
+        let content_row = div()
+            .flex_1()
+            .w_full()
+            .flex()
+            .flex_row()
+            .child(terminal_surface);
+
+        let mut terminal_root = div()
+            .id("terminal")
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .relative()
+            .bg(rgb(active_theme_palette.terminal_bg))
+            .flex()
+            .flex_col()
+            .child(tab_bar)
+            .child(content_row);
+
+        if settings_panel_open {
+            terminal_root = terminal_root.child(
+                div()
+                    .id("settings-popup-overlay")
+                    .absolute()
+                    .top(px(0.0))
+                    .right(px(0.0))
+                    .bottom(px(0.0))
+                    .left(px(0.0))
+                    .occlude()
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(0.0))
+                            .right(px(0.0))
+                            .bottom(px(0.0))
+                            .left(px(0.0))
+                            .bg(hsla(0.0, 0.0, 0.0, SETTINGS_OVERLAY_BACKDROP_ALPHA))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                                    this.settings_panel_open = false;
+                                    this.recording_global_hotkey = false;
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .relative()
+                            .size_full()
+                            .p_4()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(settings_drawer),
+                    ),
+            );
+        }
+
+        terminal_root
     }
 }
 
@@ -1147,29 +4469,11 @@ struct ColorsSnapshot {
 }
 
 impl ColorsSnapshot {
-    fn from_colors(colors: &AlacColors) -> Self {
+    fn from_colors(colors: &AlacColors, theme: TerminalTheme) -> Self {
         let mut palette = [AlacRgb { r: 0, g: 0, b: 0 }; 256];
+        let palette_theme = theme_palette(theme);
 
-        let ansi_colors: [(u8, u8, u8); 16] = [
-            (0x00, 0x00, 0x00),
-            (0xCC, 0x00, 0x00),
-            (0x4E, 0x9A, 0x06),
-            (0xC4, 0xA0, 0x00),
-            (0x34, 0x65, 0xA4),
-            (0x75, 0x50, 0x7B),
-            (0x06, 0x98, 0x9A),
-            (0xD3, 0xD7, 0xCF),
-            (0x55, 0x57, 0x53),
-            (0xEF, 0x29, 0x29),
-            (0x8A, 0xE2, 0x34),
-            (0xFC, 0xE9, 0x4F),
-            (0x72, 0x9F, 0xCF),
-            (0xAD, 0x7F, 0xA8),
-            (0x34, 0xE2, 0xE2),
-            (0xEE, 0xEE, 0xEC),
-        ];
-
-        for (i, &(r, g, b)) in ansi_colors.iter().enumerate() {
+        for (i, &(r, g, b)) in palette_theme.ansi_colors.iter().enumerate() {
             palette[i] = colors[i].unwrap_or(AlacRgb { r, g, b });
         }
 
@@ -1201,14 +4505,14 @@ impl ColorsSnapshot {
         }
 
         let foreground = colors[NamedColor::Foreground as usize].unwrap_or(AlacRgb {
-            r: 0xD3,
-            g: 0xD7,
-            b: 0xCF,
+            r: palette_theme.foreground.0,
+            g: palette_theme.foreground.1,
+            b: palette_theme.foreground.2,
         });
         let background = colors[NamedColor::Background as usize].unwrap_or(AlacRgb {
-            r: 0x00,
-            g: 0x00,
-            b: 0x00,
+            r: palette_theme.background.0,
+            g: palette_theme.background.1,
+            b: palette_theme.background.2,
         });
 
         ColorsSnapshot {
@@ -1220,7 +4524,31 @@ impl ColorsSnapshot {
 }
 
 fn resolve_color(color: &AlacColor, colors: &ColorsSnapshot, is_fg: bool) -> Hsla {
-    let rgb = match color {
+    alac_rgb_to_hsla(resolve_alac_rgb(color, colors, is_fg))
+}
+
+fn alac_rgb_to_hsla(rgb: AlacRgb) -> Hsla {
+    let r = rgb.r as f32 / 255.0;
+    let g = rgb.g as f32 / 255.0;
+    let b = rgb.b as f32 / 255.0;
+    Hsla::from(Rgba { r, g, b, a: 1.0 })
+}
+
+fn selection_tint_rgb(theme: TerminalTheme) -> AlacRgb {
+    rgb_u32_to_alac_rgb(theme_palette(theme).cursor)
+}
+
+fn selection_background_color(
+    background: &AlacColor,
+    colors: &ColorsSnapshot,
+    selection_tint: AlacRgb,
+) -> AlacColor {
+    let base_bg = resolve_alac_rgb(background, colors, false);
+    AlacColor::Spec(blend_rgb(base_bg, selection_tint, SELECTION_TINT_ALPHA))
+}
+
+fn resolve_alac_rgb(color: &AlacColor, colors: &ColorsSnapshot, is_fg: bool) -> AlacRgb {
+    match color {
         AlacColor::Named(name) => match name {
             NamedColor::Foreground => colors.foreground,
             NamedColor::Background => colors.background,
@@ -1246,16 +4574,33 @@ fn resolve_color(color: &AlacColor, colors: &ColorsSnapshot, is_fg: bool) -> Hsl
                 colors.background
             }
         }
-    };
-
-    alac_rgb_to_hsla(rgb)
+    }
 }
 
-fn alac_rgb_to_hsla(rgb: AlacRgb) -> Hsla {
-    let r = rgb.r as f32 / 255.0;
-    let g = rgb.g as f32 / 255.0;
-    let b = rgb.b as f32 / 255.0;
-    Hsla::from(Rgba { r, g, b, a: 1.0 })
+fn rgb_u32_to_alac_rgb(rgb: u32) -> AlacRgb {
+    AlacRgb {
+        r: ((rgb >> 16) & 0xFF) as u8,
+        g: ((rgb >> 8) & 0xFF) as u8,
+        b: (rgb & 0xFF) as u8,
+    }
+}
+
+fn tab_brand_purple(alpha: f32) -> Hsla {
+    hsla(272.0 / 360.0, 0.91, 0.65, alpha.clamp(0.0, 1.0))
+}
+
+fn blend_rgb(base: AlacRgb, overlay: AlacRgb, overlay_alpha: f32) -> AlacRgb {
+    let alpha = overlay_alpha.clamp(0.0, 1.0);
+    let mix = |base_channel: u8, overlay_channel: u8| -> u8 {
+        let blended = base_channel as f32 * (1.0 - alpha) + overlay_channel as f32 * alpha;
+        blended.round().clamp(0.0, 255.0) as u8
+    };
+
+    AlacRgb {
+        r: mix(base.r, overlay.r),
+        g: mix(base.g, overlay.g),
+        b: mix(base.b, overlay.b),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1525,28 +4870,37 @@ fn build_positioned_text_runs(row: &[CellSnapshot]) -> Vec<PositionedTextRun> {
 #[cfg(test)]
 mod tests {
     use super::utils::{
-        display_offset_from_thumb_top, resolve_working_directory_with_fallback,
-        scrollbar_thumb_metrics, INPUT_SCROLL_SUPPRESSION_WINDOW,
+        common_shortcut_action, display_offset_from_thumb_top,
+        resolve_working_directory_with_fallback, scrollbar_thumb_metrics,
+        selection_type_for_click_count, CommonShortcutAction, INPUT_SCROLL_SUPPRESSION_WINDOW,
     };
     use super::{
-        alternate_scroll_enabled, build_background_spans, build_positioned_text_runs,
-        consume_scroll_lines, dirty_rows_for_snapshot, display_offset_from_pointer,
+        alternate_scroll_enabled, beam_cursor_width, blend_rgb, build_background_spans,
+        build_positioned_text_runs, consume_scroll_lines, cursor_blink_is_suppressed,
+        cursor_should_blink, dirty_rows_for_snapshot, display_offset_from_pointer,
         effective_scroll_multiplier, file_path_to_file_url, mouse_mode_enabled_for_scroll,
         point_in_bounds, prepare_for_terminal_input, row_cache_rebuild_required,
-        scroll_delta_to_lines, scrollbar_layout, selection_copy_plan,
-        shift_row_cache_for_display_offset, should_ignore_scroll_event, strip_line_column_suffix,
-        text_to_insert, update_action_for_terminal_event, viewport_row_for_line, CachedRow,
-        CachedTextRun, CellSnapshot, ColorsSnapshot, FrameCache, PreviousFrameView,
-        ScrollbarLayout, TerminalSnapshot, ViewUpdateAction,
+        scroll_delta_to_lines, scrollbar_layout, selection_background_color, selection_copy_plan,
+        selection_tint_rgb, shift_row_cache_for_display_offset, should_ignore_scroll_event,
+        strip_line_column_suffix, tab_brand_purple, text_to_insert, theme_palette,
+        underline_cursor_height, update_action_for_terminal_event, viewport_row_for_line,
+        CachedRow, CachedTextRun, CellSnapshot, ColorsSnapshot, CursorShape, FrameCache,
+        PreviousFrameView, ScrollbarLayout, SettingsLineHeightMode, TerminalSnapshot, TerminalView,
+        ViewUpdateAction, FIND_PANEL_MAX_WIDTH_PX, FIND_PANEL_MIN_WIDTH_PX,
+        SETTINGS_DRAWER_WIDTH_PX, SETTINGS_OVERLAY_BACKDROP_ALPHA, TAB_BAR_HEIGHT_PX,
+        TAB_CLOSE_BUTTON_SIZE_PX, TAB_ITEM_INDICATOR_BOTTOM_GAP_PX, TAB_ITEM_WIDTH_PX,
     };
     use alacritty_terminal::term::cell::Flags;
     use alacritty_terminal::vte::ansi::{Color as AlacColor, NamedColor, Rgb as AlacRgb};
     use gpui::{point, px, size, Bounds, Keystroke, Modifiers, Point, ScrollDelta, TouchPhase};
     use simple_term::terminal::TerminalEvent;
-    use simple_term::terminal_settings::WorkingDirectory;
-    use simple_term::AlternateScroll;
+    use simple_term::terminal_settings::{
+        Blinking, LineHeight, TerminalSettings, TerminalTheme, WorkingDirectory,
+    };
     use simple_term::TermMode;
+    use simple_term::{AlternateScroll, SelectionType};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -1618,7 +4972,10 @@ mod tests {
             display_offset,
             cursor_row,
             cursor_col,
+            cursor_shape: CursorShape::Block,
+            cursor_blinking: false,
             show_cursor,
+            cursor_draw_visible: show_cursor,
             colors: test_colors(),
         }
     }
@@ -1680,6 +5037,532 @@ mod tests {
             update_action_for_terminal_event(TerminalEvent::Exit(0)),
             ViewUpdateAction::Exit
         );
+    }
+
+    #[test]
+    fn sanitize_tab_title_removes_control_characters_and_limits_length() {
+        let sanitized = TerminalView::sanitize_tab_title("  \u{0007}hello\tworld\u{001b}[31m  ");
+        assert_eq!(sanitized, "hello\tworld[31m");
+
+        let long = "x".repeat(120);
+        let truncated = TerminalView::sanitize_tab_title(&long);
+        assert_eq!(truncated.len(), 60);
+    }
+
+    #[test]
+    fn sanitize_tab_title_falls_back_when_empty_after_sanitization() {
+        assert_eq!(
+            TerminalView::sanitize_tab_title("\u{0000}\u{0001}  "),
+            "shell"
+        );
+    }
+
+    #[test]
+    fn next_tab_number_fills_first_available_slot() {
+        assert_eq!(TerminalView::next_tab_number_from_numbers(&[]), 1);
+        assert_eq!(TerminalView::next_tab_number_from_numbers(&[1, 2, 4]), 3);
+        assert_eq!(TerminalView::next_tab_number_from_numbers(&[2, 3]), 1);
+    }
+
+    #[test]
+    fn next_active_index_after_close_prefers_right_neighbor() {
+        assert_eq!(TerminalView::next_active_index_after_close(0, 3), 0);
+        assert_eq!(TerminalView::next_active_index_after_close(1, 3), 1);
+        assert_eq!(TerminalView::next_active_index_after_close(2, 3), 2);
+    }
+
+    #[test]
+    fn next_active_index_after_close_clamps_for_rightmost_closure() {
+        assert_eq!(TerminalView::next_active_index_after_close(2, 2), 1);
+        assert_eq!(TerminalView::next_active_index_after_close(5, 1), 0);
+    }
+
+    #[test]
+    fn hovered_tab_id_after_event_tracks_enter_and_leave() {
+        assert_eq!(
+            TerminalView::hovered_tab_id_after_event(None, 3, true),
+            Some(3)
+        );
+        assert_eq!(
+            TerminalView::hovered_tab_id_after_event(Some(3), 3, false),
+            None
+        );
+    }
+
+    #[test]
+    fn hovered_tab_id_after_event_ignores_leave_for_other_tab() {
+        assert_eq!(
+            TerminalView::hovered_tab_id_after_event(Some(4), 3, false),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn close_tab_hides_window_when_last_tab_would_be_closed() {
+        assert!(TerminalView::should_hide_window_when_closing_tab(0));
+        assert!(TerminalView::should_hide_window_when_closing_tab(1));
+        assert!(!TerminalView::should_hide_window_when_closing_tab(2));
+    }
+
+    #[test]
+    fn window_deactivation_hide_scheduling_requires_auto_hide_and_inactive_window() {
+        assert!(TerminalView::should_schedule_window_deactivation_hide(
+            true, false, true
+        ));
+        assert!(!TerminalView::should_schedule_window_deactivation_hide(
+            true, true, true
+        ));
+        assert!(!TerminalView::should_schedule_window_deactivation_hide(
+            true, false, false
+        ));
+        assert!(!TerminalView::should_schedule_window_deactivation_hide(
+            false, false, true
+        ));
+    }
+
+    #[test]
+    fn window_deactivation_hide_callback_is_deferred() {
+        let hide_called = Arc::new(AtomicBool::new(false));
+        let hide_called_flag = hide_called.clone();
+        let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            hide_called_flag.store(true, Ordering::SeqCst);
+        });
+
+        let mut deferred: Option<Arc<dyn Fn() + Send + Sync>> = None;
+        TerminalView::schedule_window_deactivation_hide(
+            true,
+            false,
+            true,
+            Some(callback),
+            |scheduled_callback| {
+                deferred = Some(scheduled_callback);
+            },
+        );
+
+        assert!(deferred.is_some());
+        assert!(!hide_called.load(Ordering::SeqCst));
+
+        deferred.expect("callback should be deferred")();
+        assert!(hide_called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn tab_item_vertical_footprint_is_stable_across_tab_positions() {
+        let last_tab_height = TerminalView::tab_item_vertical_footprint_px(false);
+        let non_last_tab_height = TerminalView::tab_item_vertical_footprint_px(true);
+        assert_eq!(last_tab_height, non_last_tab_height);
+    }
+
+    #[test]
+    fn tab_item_vertical_footprint_fits_tab_bar_height_budget() {
+        let tab_height = TerminalView::tab_item_vertical_footprint_px(true);
+        assert!(
+            tab_height <= TAB_BAR_HEIGHT_PX,
+            "tab height {} exceeds bar height {}",
+            tab_height,
+            TAB_BAR_HEIGHT_PX
+        );
+    }
+
+    #[test]
+    fn tab_spacing_tokens_follow_balanced_compact_spec() {
+        assert_eq!(TAB_BAR_HEIGHT_PX, 40.0);
+        assert_eq!(TAB_ITEM_WIDTH_PX, 152.0);
+        assert_eq!(TAB_ITEM_INDICATOR_BOTTOM_GAP_PX, 2.0);
+        assert!(TAB_ITEM_WIDTH_PX > TAB_CLOSE_BUTTON_SIZE_PX);
+
+        let tab_height = TerminalView::tab_item_vertical_footprint_px(true);
+        assert!(tab_height <= TAB_BAR_HEIGHT_PX);
+    }
+
+    #[test]
+    fn font_family_options_include_active_and_unique_entries() {
+        let settings = TerminalSettings {
+            font_family: "JetBrains Mono".to_string(),
+            font_fallbacks: vec![
+                "JetBrains Mono".to_string(),
+                "Menlo".to_string(),
+                "menlo".to_string(),
+                "SF Mono".to_string(),
+            ],
+            ..TerminalSettings::default()
+        };
+
+        let options = TerminalView::font_family_options_from_settings(&settings);
+        assert_eq!(
+            options.iter().take(3).cloned().collect::<Vec<_>>(),
+            vec![
+                "JetBrains Mono".to_string(),
+                "Menlo".to_string(),
+                "SF Mono".to_string(),
+            ]
+        );
+        assert_eq!(
+            options
+                .iter()
+                .filter(|family| family.eq_ignore_ascii_case("menlo"))
+                .count(),
+            1
+        );
+        assert!(options.iter().any(|family| family == "Fira Code"));
+    }
+
+    #[test]
+    fn next_font_family_wraps_for_forward_and_backward_navigation() {
+        let options = vec![
+            "Menlo".to_string(),
+            "JetBrains Mono".to_string(),
+            "SF Mono".to_string(),
+        ];
+
+        assert_eq!(
+            TerminalView::next_font_family("SF Mono", &options, 1),
+            "Menlo".to_string()
+        );
+        assert_eq!(
+            TerminalView::next_font_family("Menlo", &options, -1),
+            "SF Mono".to_string()
+        );
+    }
+
+    #[test]
+    fn next_theme_wraps_for_forward_and_backward_navigation() {
+        assert_eq!(
+            TerminalView::next_theme(TerminalTheme::SolarizedDark, 1),
+            TerminalTheme::AtomOneDark
+        );
+        assert_eq!(
+            TerminalView::next_theme(TerminalTheme::AtomOneDark, -1),
+            TerminalTheme::SolarizedDark
+        );
+    }
+
+    #[test]
+    fn atom_one_dark_theme_palette_matches_configured_black_and_white_bias() {
+        let palette = theme_palette(TerminalTheme::AtomOneDark);
+        assert_eq!(palette.ui_bg, 0x101010);
+        assert_eq!(palette.terminal_bg, 0x000000);
+        assert_eq!(palette.cursor, 0x528bff);
+        assert_eq!(
+            palette.ansi_colors,
+            [
+                (0x3F, 0x44, 0x51),
+                (0xE0, 0x55, 0x61),
+                (0x8C, 0xC2, 0x65),
+                (0xD1, 0x8F, 0x52),
+                (0x4A, 0xA5, 0xF0),
+                (0xC1, 0x62, 0xDE),
+                (0x42, 0xB3, 0xC2),
+                (0xD7, 0xDA, 0xE0),
+                (0x4F, 0x56, 0x66),
+                (0xFF, 0x61, 0x6E),
+                (0xA5, 0xE0, 0x75),
+                (0xF0, 0xA4, 0x5D),
+                (0x4D, 0xC4, 0xFF),
+                (0xDE, 0x73, 0xFF),
+                (0x4C, 0xD1, 0xE0),
+                (0xE6, 0xE6, 0xE6),
+            ]
+        );
+        assert_eq!(palette.foreground, (0xE6, 0xE6, 0xE6));
+        assert_eq!(palette.background, (0x00, 0x00, 0x00));
+    }
+
+    #[test]
+    fn tab_brand_purple_matches_requested_indicator_color() {
+        let purple = tab_brand_purple(1.0);
+        assert_eq!(purple.h, 272.0 / 360.0);
+        assert_eq!(purple.s, 0.91);
+        assert_eq!(purple.l, 0.65);
+        assert_eq!(purple.a, 1.0);
+    }
+
+    #[test]
+    fn blend_rgb_interpolates_channels() {
+        let base = AlacRgb { r: 0, g: 0, b: 0 };
+        let overlay = AlacRgb {
+            r: 0x52,
+            g: 0x8B,
+            b: 0xFF,
+        };
+
+        let blended = blend_rgb(base, overlay, 0.30);
+        assert_eq!(
+            blended,
+            AlacRgb {
+                r: 25,
+                g: 42,
+                b: 77
+            }
+        );
+    }
+
+    #[test]
+    fn selection_background_color_uses_soft_tint_instead_of_foreground_swap() {
+        let colors = test_colors();
+        let selected = selection_background_color(
+            &AlacColor::Named(NamedColor::Background),
+            &colors,
+            selection_tint_rgb(TerminalTheme::AtomOneDark),
+        );
+
+        match selected {
+            AlacColor::Spec(rgb) => {
+                assert_eq!(
+                    rgb,
+                    AlacRgb {
+                        r: 25,
+                        g: 42,
+                        b: 77
+                    }
+                );
+                assert_ne!(rgb, colors.foreground);
+            }
+            _ => panic!("selection background should be a concrete tinted RGB color"),
+        }
+    }
+
+    #[test]
+    fn toggled_settings_panel_open_flips_boolean_state() {
+        assert!(TerminalView::toggled_settings_panel_open(false));
+        assert!(!TerminalView::toggled_settings_panel_open(true));
+    }
+
+    #[test]
+    fn global_hotkey_from_keystroke_builds_command_function_shortcut() {
+        let keystroke = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "f4".to_string(),
+            key_char: None,
+        };
+
+        assert_eq!(
+            TerminalView::global_hotkey_from_keystroke(&keystroke),
+            Some("command+F4".to_string())
+        );
+    }
+
+    #[test]
+    fn global_hotkey_from_keystroke_accepts_backquote_toggle_style() {
+        let keystroke = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "backquote".to_string(),
+            key_char: None,
+        };
+
+        assert_eq!(
+            TerminalView::global_hotkey_from_keystroke(&keystroke),
+            Some("command+Backquote".to_string())
+        );
+    }
+
+    #[test]
+    fn global_hotkey_from_keystroke_rejects_shortcuts_without_modifier() {
+        let keystroke = Keystroke {
+            modifiers: Modifiers::default(),
+            key: "f4".to_string(),
+            key_char: None,
+        };
+
+        assert_eq!(TerminalView::global_hotkey_from_keystroke(&keystroke), None);
+    }
+
+    #[test]
+    fn global_hotkey_from_keystroke_rejects_modifier_only_input() {
+        let keystroke = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "shift".to_string(),
+            key_char: None,
+        };
+
+        assert_eq!(TerminalView::global_hotkey_from_keystroke(&keystroke), None);
+    }
+
+    #[test]
+    fn find_panel_width_scales_with_viewport_space() {
+        assert_eq!(
+            TerminalView::find_panel_width_for_viewport(px(1400.0)),
+            px(FIND_PANEL_MAX_WIDTH_PX)
+        );
+        assert_eq!(
+            TerminalView::find_panel_width_for_viewport(px(900.0)),
+            px(580.0)
+        );
+        assert_eq!(
+            TerminalView::find_panel_width_for_viewport(px(320.0)),
+            px(FIND_PANEL_MIN_WIDTH_PX)
+        );
+        assert_eq!(
+            TerminalView::find_panel_width_for_viewport(px(180.0)),
+            px(156.0)
+        );
+    }
+
+    #[test]
+    fn settings_drawer_width_respects_viewport_margin() {
+        assert_eq!(
+            TerminalView::settings_drawer_width_for_viewport(px(1000.0)),
+            px(SETTINGS_DRAWER_WIDTH_PX)
+        );
+        assert_eq!(
+            TerminalView::settings_drawer_width_for_viewport(px(320.0)),
+            px(288.0)
+        );
+        assert_eq!(
+            TerminalView::settings_drawer_width_for_viewport(px(220.0)),
+            px(188.0)
+        );
+    }
+
+    #[test]
+    fn theme_label_formats_atom_one_dark_with_spaces() {
+        assert_eq!(
+            TerminalView::theme_label(TerminalTheme::AtomOneDark),
+            "Atom One Dark"
+        );
+    }
+
+    #[test]
+    fn settings_drawer_scrollbar_width_is_non_zero_for_scroll_behavior() {
+        assert!(TerminalView::settings_drawer_scrollbar_width() > px(0.0));
+    }
+
+    #[test]
+    fn settings_overlay_backdrop_alpha_stays_subtle() {
+        assert!(SETTINGS_OVERLAY_BACKDROP_ALPHA > 0.0);
+        assert!(SETTINGS_OVERLAY_BACKDROP_ALPHA < 0.5);
+    }
+
+    #[test]
+    fn settings_drawer_scrollbar_thumb_metrics_require_positive_scroll_range() {
+        assert_eq!(
+            TerminalView::settings_drawer_scrollbar_thumb_metrics(px(320.0), px(0.0), px(0.0)),
+            None
+        );
+        assert_eq!(
+            TerminalView::settings_drawer_scrollbar_thumb_metrics(px(0.0), px(400.0), px(0.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn settings_drawer_scrollbar_thumb_metrics_map_scroll_offset_to_thumb_position() {
+        let (top_at_start, thumb_height) =
+            TerminalView::settings_drawer_scrollbar_thumb_metrics(px(240.0), px(480.0), px(0.0))
+                .expect("scrollbar should be visible for positive overflow");
+        assert_eq!(top_at_start, px(0.0));
+        assert!(thumb_height > px(70.0));
+        assert!(thumb_height < px(90.0));
+
+        let (top_at_end, _) =
+            TerminalView::settings_drawer_scrollbar_thumb_metrics(px(240.0), px(480.0), px(-480.0))
+                .expect("scrollbar should remain visible at bottom offset");
+        assert!(top_at_end > px(150.0));
+        assert!(top_at_end <= px(160.0));
+    }
+
+    #[test]
+    fn should_close_settings_panel_only_on_plain_escape() {
+        let plain_escape = Keystroke::parse("escape").expect("escape keystroke");
+        assert!(TerminalView::should_close_settings_panel_for_keystroke(
+            &plain_escape
+        ));
+
+        let ctrl_escape = Keystroke {
+            modifiers: Modifiers {
+                control: true,
+                ..Modifiers::default()
+            },
+            key: "escape".to_string(),
+            key_char: None,
+        };
+        assert!(!TerminalView::should_close_settings_panel_for_keystroke(
+            &ctrl_escape
+        ));
+
+        let plain_character = Keystroke {
+            modifiers: Modifiers::default(),
+            key: "a".to_string(),
+            key_char: Some("a".to_string()),
+        };
+        assert!(!TerminalView::should_close_settings_panel_for_keystroke(
+            &plain_character
+        ));
+    }
+
+    #[test]
+    fn line_height_mode_maps_variants_for_settings_controls() {
+        assert_eq!(
+            TerminalView::line_height_mode(&LineHeight::Comfortable),
+            SettingsLineHeightMode::Comfortable
+        );
+        assert_eq!(
+            TerminalView::line_height_mode(&LineHeight::Standard),
+            SettingsLineHeightMode::Standard
+        );
+        assert_eq!(
+            TerminalView::line_height_mode(&LineHeight::Custom { value: 1.75 }),
+            SettingsLineHeightMode::Custom
+        );
+    }
+
+    #[test]
+    fn normalized_scroll_multiplier_falls_back_for_invalid_values() {
+        assert_eq!(TerminalView::normalized_scroll_multiplier(3.5), 3.5);
+        assert_eq!(TerminalView::normalized_scroll_multiplier(0.0), 0.01);
+        assert_eq!(TerminalView::normalized_scroll_multiplier(20.0), 10.0);
+        assert_eq!(TerminalView::normalized_scroll_multiplier(f32::NAN), 1.0);
+        assert_eq!(
+            TerminalView::normalized_scroll_multiplier(f32::INFINITY),
+            1.0
+        );
+    }
+
+    #[test]
+    fn cursor_should_blink_respects_blinking_mode() {
+        assert!(!cursor_should_blink(Blinking::Off, true));
+        assert!(cursor_should_blink(Blinking::On, false));
+        assert!(cursor_should_blink(Blinking::TerminalControlled, true));
+        assert!(!cursor_should_blink(Blinking::TerminalControlled, false));
+    }
+
+    #[test]
+    fn cursor_blink_is_suppressed_during_recent_input_window() {
+        let now = Instant::now();
+        assert!(cursor_blink_is_suppressed(
+            Some(now + Duration::from_millis(250)),
+            now
+        ));
+        assert!(!cursor_blink_is_suppressed(
+            Some(now + Duration::from_millis(250)),
+            now + Duration::from_millis(251)
+        ));
+        assert!(!cursor_blink_is_suppressed(None, now));
+    }
+
+    #[test]
+    fn beam_cursor_width_is_narrower_than_cell_width() {
+        let cell_width = px(10.0);
+        let width = beam_cursor_width(cell_width);
+        assert!(width < cell_width);
+        assert!(width >= px(1.0));
+    }
+
+    #[test]
+    fn underline_cursor_height_is_narrower_than_cell_height() {
+        let cell_height = px(18.0);
+        let height = underline_cursor_height(cell_height);
+        assert!(height < cell_height);
+        assert!(height >= px(1.0));
     }
 
     #[test]
@@ -2092,6 +5975,14 @@ mod tests {
         let (text, clear) = selection_copy_plan(true, false, Some("hello".to_string()));
         assert_eq!(text.as_deref(), Some("hello"));
         assert!(clear);
+    }
+
+    #[test]
+    fn selection_type_for_click_count_matches_terminal_conventions() {
+        assert_eq!(selection_type_for_click_count(1), SelectionType::Simple);
+        assert_eq!(selection_type_for_click_count(2), SelectionType::Semantic);
+        assert_eq!(selection_type_for_click_count(3), SelectionType::Lines);
+        assert_eq!(selection_type_for_click_count(4), SelectionType::Lines);
     }
 
     #[test]
@@ -2574,6 +6465,157 @@ mod tests {
             key_char: Some("v".to_string()),
         };
         assert_eq!(text_to_insert(&platform), None);
+    }
+
+    #[test]
+    fn common_shortcut_action_matches_platform_shortcuts() {
+        let platform_copy = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "c".to_string(),
+            key_char: None,
+        };
+        assert_eq!(
+            common_shortcut_action(&platform_copy),
+            Some(CommonShortcutAction::CopySelection)
+        );
+
+        let platform_paste = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "v".to_string(),
+            key_char: None,
+        };
+        assert_eq!(
+            common_shortcut_action(&platform_paste),
+            Some(CommonShortcutAction::Paste)
+        );
+
+        let platform_select_all = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "a".to_string(),
+            key_char: None,
+        };
+        assert_eq!(
+            common_shortcut_action(&platform_select_all),
+            Some(CommonShortcutAction::SelectAll)
+        );
+
+        let platform_find = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "f".to_string(),
+            key_char: None,
+        };
+        assert_eq!(
+            common_shortcut_action(&platform_find),
+            Some(CommonShortcutAction::Find)
+        );
+    }
+
+    #[test]
+    fn common_shortcut_action_matches_ctrl_shift_shortcuts() {
+        let ctrl_shift_copy = Keystroke {
+            modifiers: Modifiers {
+                control: true,
+                shift: true,
+                ..Modifiers::default()
+            },
+            key: "c".to_string(),
+            key_char: None,
+        };
+        assert_eq!(
+            common_shortcut_action(&ctrl_shift_copy),
+            Some(CommonShortcutAction::CopySelection)
+        );
+
+        let ctrl_shift_paste = Keystroke {
+            modifiers: Modifiers {
+                control: true,
+                shift: true,
+                ..Modifiers::default()
+            },
+            key: "v".to_string(),
+            key_char: None,
+        };
+        assert_eq!(
+            common_shortcut_action(&ctrl_shift_paste),
+            Some(CommonShortcutAction::Paste)
+        );
+
+        let ctrl_shift_select_all = Keystroke {
+            modifiers: Modifiers {
+                control: true,
+                shift: true,
+                ..Modifiers::default()
+            },
+            key: "a".to_string(),
+            key_char: None,
+        };
+        assert_eq!(
+            common_shortcut_action(&ctrl_shift_select_all),
+            Some(CommonShortcutAction::SelectAll)
+        );
+
+        let ctrl_shift_find = Keystroke {
+            modifiers: Modifiers {
+                control: true,
+                shift: true,
+                ..Modifiers::default()
+            },
+            key: "f".to_string(),
+            key_char: None,
+        };
+        assert_eq!(
+            common_shortcut_action(&ctrl_shift_find),
+            Some(CommonShortcutAction::Find)
+        );
+    }
+
+    #[test]
+    fn common_shortcut_action_does_not_intercept_terminal_control_keys() {
+        let ctrl_c = Keystroke::parse("ctrl-c").expect("valid ctrl-c");
+        assert_eq!(common_shortcut_action(&ctrl_c), None);
+
+        let ctrl_v = Keystroke::parse("ctrl-v").expect("valid ctrl-v");
+        assert_eq!(common_shortcut_action(&ctrl_v), None);
+
+        let ctrl_f = Keystroke::parse("ctrl-f").expect("valid ctrl-f");
+        assert_eq!(common_shortcut_action(&ctrl_f), None);
+
+        let platform_tab = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "tab".to_string(),
+            key_char: None,
+        };
+        assert_eq!(common_shortcut_action(&platform_tab), None);
+    }
+
+    #[test]
+    fn normalize_find_query_uses_first_non_empty_line() {
+        assert_eq!(
+            TerminalView::normalize_find_query("  hello world  \nsecond"),
+            Some("hello world".to_string())
+        );
+        assert_eq!(TerminalView::normalize_find_query(" \nnext"), None);
+    }
+
+    #[test]
+    fn regex_escape_literal_escapes_special_characters() {
+        let escaped = TerminalView::regex_escape_literal("a+b(c)?[d]{e}|f.^$\\");
+        assert_eq!(escaped, r"a\+b\(c\)\?\[d\]\{e\}\|f\.\^\$\\");
     }
 
     #[test]

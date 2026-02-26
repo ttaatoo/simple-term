@@ -1,4 +1,4 @@
-//! Zed Terminal - A standalone terminal emulator library
+//! Simple Term - A standalone terminal emulator library
 //!
 //! This crate provides a terminal emulator based on alacritty_terminal,
 //! adapted for use as a standalone library with GPUI.
@@ -14,7 +14,7 @@ pub use alacritty_terminal;
 
 use serde::{Deserialize, Serialize};
 
-pub use terminal_settings::{AlternateScroll, CursorShape, TerminalSettings};
+pub use terminal_settings::{AlternateScroll, CursorShape, TerminalSettings, TerminalTheme};
 
 /// Re-export commonly used types
 pub use alacritty_terminal::{

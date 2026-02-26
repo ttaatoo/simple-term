@@ -1,6 +1,6 @@
 use gpui::{point, px, size, Bounds, Pixels, ScrollDelta, TouchPhase};
 use simple_term::terminal_settings::{AlternateScroll, WorkingDirectory};
-use simple_term::TermMode;
+use simple_term::{SelectionType, TermMode};
 use std::time::{Duration, Instant};
 use url::Url;
 
@@ -130,6 +130,14 @@ pub(super) fn should_ignore_scroll_event(
 
 pub(super) fn mouse_mode_enabled_for_scroll(mode: TermMode, shift_held: bool) -> bool {
     mode.intersects(TermMode::MOUSE_MODE) && !shift_held
+}
+
+pub(super) fn selection_type_for_click_count(click_count: usize) -> SelectionType {
+    match click_count {
+        0 | 1 => SelectionType::Simple,
+        2 => SelectionType::Semantic,
+        _ => SelectionType::Lines,
+    }
 }
 
 pub(super) fn alternate_scroll_enabled(
@@ -289,6 +297,41 @@ pub(super) fn selection_copy_plan(
     };
 
     (Some(text), !keep_selection_on_copy)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CommonShortcutAction {
+    CopySelection,
+    Paste,
+    SelectAll,
+    Find,
+}
+
+pub(super) fn common_shortcut_action(keystroke: &gpui::Keystroke) -> Option<CommonShortcutAction> {
+    let modifiers = keystroke.modifiers;
+    let platform_shortcut =
+        modifiers.platform && !modifiers.control && !modifiers.alt && !modifiers.function;
+    let ctrl_shift_shortcut =
+        modifiers.control && modifiers.shift && !modifiers.platform && !modifiers.alt;
+
+    if !(platform_shortcut || ctrl_shift_shortcut) {
+        return None;
+    }
+
+    if keystroke.key.eq_ignore_ascii_case("c") {
+        return Some(CommonShortcutAction::CopySelection);
+    }
+    if keystroke.key.eq_ignore_ascii_case("v") {
+        return Some(CommonShortcutAction::Paste);
+    }
+    if keystroke.key.eq_ignore_ascii_case("a") {
+        return Some(CommonShortcutAction::SelectAll);
+    }
+    if keystroke.key.eq_ignore_ascii_case("f") {
+        return Some(CommonShortcutAction::Find);
+    }
+
+    None
 }
 
 pub(super) fn text_to_insert(keystroke: &gpui::Keystroke) -> Option<String> {

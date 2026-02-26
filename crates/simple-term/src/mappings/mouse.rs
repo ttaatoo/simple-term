@@ -8,7 +8,7 @@ use std::iter::repeat_n;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column as GridCol, Line as GridLine, Point as AlacPoint, Side};
 use alacritty_terminal::term::TermMode;
-use gpui::{px, Modifiers, MouseButton, Pixels, Point, ScrollWheelEvent};
+use gpui::{point, px, Modifiers, MouseButton, Pixels, Point, ScrollWheelEvent};
 
 use crate::TerminalBounds;
 
@@ -162,8 +162,13 @@ pub fn grid_point_and_side(
     cur_size: TerminalBounds,
     display_offset: usize,
 ) -> (AlacPoint, Side) {
-    let mut col = GridCol((pos.x / cur_size.cell_width) as usize);
-    let cell_x = cmp::max(px(0.), pos.x) % cur_size.cell_width;
+    let local_pos = point(
+        pos.x - cur_size.bounds.origin.x,
+        pos.y - cur_size.bounds.origin.y,
+    );
+
+    let mut col = GridCol((local_pos.x / cur_size.cell_width) as usize);
+    let cell_x = cmp::max(px(0.), local_pos.x) % cur_size.cell_width;
     let half_cell_width = cur_size.cell_width / 2.0;
     let mut side = if cell_x > half_cell_width {
         Side::Right
@@ -176,7 +181,7 @@ pub fn grid_point_and_side(
         side = Side::Right;
     }
     let col = min(col, cur_size.last_column());
-    let mut line = (pos.y / cur_size.line_height) as i32;
+    let mut line = (local_pos.y / cur_size.line_height) as i32;
     if line > cur_size.bottommost_line() {
         line = cur_size.bottommost_line().0;
         side = Side::Right;
@@ -368,6 +373,26 @@ mod tests {
         let point = grid_point(point(px(20.0), px(40.0)), bounds, 2);
         assert_eq!(point.column, GridCol(2));
         assert_eq!(point.line, GridLine(2));
+    }
+
+    #[test]
+    fn grid_point_accounts_for_non_zero_bounds_origin() {
+        let bounds = TerminalBounds::new(
+            px(10.0),
+            px(5.0),
+            Bounds {
+                origin: point(px(17.0), px(40.0)),
+                size: Size {
+                    width: px(100.0),
+                    height: px(100.0),
+                },
+            },
+        );
+
+        let (point, side) = grid_point_and_side(point(px(19.0), px(49.0)), bounds, 0);
+        assert_eq!(point.column, GridCol(0));
+        assert_eq!(point.line, GridLine(0));
+        assert_eq!(side, Side::Left);
     }
 
     #[test]

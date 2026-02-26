@@ -142,6 +142,7 @@ jobs:
           app_root="dist/SimpleTerm.app"
           bundle_version="${TAG_NAME#v}"
           mkdir -p "${app_root}/Contents/MacOS"
+          mkdir -p "${app_root}/Contents/Resources"
           cat > "${app_root}/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -161,10 +162,13 @@ jobs:
               <string>APPL</string>
               <key>CFBundleExecutable</key>
               <string>simple-term</string>
+              <key>CFBundleIconFile</key>
+              <string>SimpleTerm.icns</string>
             </dict>
           </plist>
           PLIST
           cp target/release/simple-term "${app_root}/Contents/MacOS/simple-term"
+          cp apps/simple-term/assets/SimpleTerm.icns "${app_root}/Contents/Resources/SimpleTerm.icns"
           chmod +x "${app_root}/Contents/MacOS/simple-term"
 
       - name: Package binary tarball (macOS)

@@ -32,3 +32,7 @@ url.workspace = true
 # Pin core-text (macOS) to fix zed-font-kit build
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text.workspace = true
+cocoa = "0.26.1"
+global-hotkey = "0.7"
+objc = "0.2"
+raw-window-handle = "0.6"

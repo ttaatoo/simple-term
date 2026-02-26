@@ -15,14 +15,14 @@ A clean repository layout is critical for both humans and LLM agents. Parallel l
 
 Before cleanup, the repository included:
 - active workspace paths: `apps/simple-term`, `crates/simple-term`
-- stale non-workspace paths: `apps/zed-terminal`, `crates/zed-terminal`
+- stale non-workspace paths: `apps/simple-term`, `crates/simple-term`
 
 Only `simple-term` paths were listed in root workspace members.
 
 ## Decision and Rationale
 
 Decision:
-- Remove `apps/zed-terminal` and `crates/zed-terminal` from the repository.
+- Remove `apps/simple-term` and `crates/simple-term` from the repository.
 
 Rationale:
 - Eliminate ambiguity during navigation/search.
@@ -75,7 +75,7 @@ Avoid:
 
 Required checks:
 - `cargo check --workspace`
-- `rg -n "apps/zed-terminal|crates/zed-terminal" -S .` should return no active references (except historical git metadata)
+- `rg -n "apps/simple-term|crates/simple-term" -S .` should return no active references (except historical git metadata)
 
 Manual checks:
 - validate README project layout section

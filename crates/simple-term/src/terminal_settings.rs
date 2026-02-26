@@ -20,6 +20,26 @@ pub enum AlternateScroll {
     Off,
 }
 
+/// Terminal and chrome theme preset.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalTheme {
+    /// Atom One Dark-aligned dark palette.
+    #[default]
+    #[serde(rename = "atom_one_dark", alias = "microterm")]
+    AtomOneDark,
+    /// Warm, contrast-friendly dark palette.
+    GruvboxDark,
+    /// Cool dark palette with vivid accents.
+    TokyoNight,
+    /// Soft pastel dark palette.
+    CatppuccinMocha,
+    /// Muted polar dark palette.
+    Nord,
+    /// Solarized dark palette.
+    SolarizedDark,
+}
+
 /// Cursor shape
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -66,6 +86,16 @@ pub enum Blinking {
     TerminalControlled,
     /// Blinking on
     On,
+}
+
+impl Blinking {
+    pub fn uses_terminal_control(self) -> bool {
+        matches!(self, Blinking::TerminalControlled)
+    }
+
+    pub fn default_enabled(self) -> bool {
+        matches!(self, Blinking::On)
+    }
 }
 
 /// Line height setting
@@ -194,6 +224,21 @@ pub struct TerminalSettings {
     /// Show terminal button in status bar
     #[serde(default = "default_true")]
     pub button: bool,
+    /// Terminal and app-chrome theme preset
+    #[serde(default)]
+    pub theme: TerminalTheme,
+    /// Global hotkey string
+    #[serde(default = "default_global_hotkey")]
+    pub global_hotkey: String,
+    /// Pin/unpin hotkey string for always-show mode
+    #[serde(default = "default_pin_hotkey")]
+    pub pin_hotkey: String,
+    /// Auto-hide when clicking outside the terminal window
+    #[serde(default = "default_true")]
+    pub auto_hide_on_outside_click: bool,
+    /// Distance from menubar bottom to terminal panel top (pixels)
+    #[serde(default = "default_panel_top_inset")]
+    pub panel_top_inset: f32,
     /// Default terminal width
     #[serde(default = "default_width")]
     pub default_width: u32,
@@ -227,6 +272,7 @@ const MIN_LINE_HEIGHT_RATIO: f32 = 0.5;
 const MAX_LINE_HEIGHT_RATIO: f32 = 3.0;
 const MAX_DEFAULT_WIDTH: u32 = 8192;
 const MAX_DEFAULT_HEIGHT: u32 = 4320;
+const MAX_PANEL_TOP_INSET: f32 = 64.0;
 
 fn default_font_family() -> String {
     if cfg!(target_os = "macos") {
@@ -271,6 +317,18 @@ fn default_width() -> u32 {
     640
 }
 
+fn default_global_hotkey() -> String {
+    "command+F4".to_string()
+}
+
+fn default_pin_hotkey() -> String {
+    "command+Backquote".to_string()
+}
+
+fn default_panel_top_inset() -> f32 {
+    8.0
+}
+
 fn default_height() -> u32 {
     320
 }
@@ -308,6 +366,11 @@ impl Default for TerminalSettings {
             copy_on_select: false,
             keep_selection_on_copy: true,
             button: true,
+            theme: TerminalTheme::default(),
+            global_hotkey: default_global_hotkey(),
+            pin_hotkey: default_pin_hotkey(),
+            auto_hide_on_outside_click: true,
+            panel_top_inset: default_panel_top_inset(),
             default_width: default_width(),
             default_height: default_height(),
             max_scroll_history_lines: default_scrollback(),
@@ -320,6 +383,13 @@ impl Default for TerminalSettings {
 }
 
 impl TerminalSettings {
+    pub fn default_cursor_style(&self) -> AlacCursorStyle {
+        AlacCursorStyle {
+            shape: self.cursor_shape.into(),
+            blinking: self.blinking.default_enabled(),
+        }
+    }
+
     fn sanitize(mut self) -> Self {
         if !self.font_size.is_finite() || self.font_size <= 0.0 {
             self.font_size = default_font_size();
@@ -350,6 +420,19 @@ impl TerminalSettings {
             self.default_height = self.default_height.min(MAX_DEFAULT_HEIGHT);
         }
 
+        if self.global_hotkey.trim().is_empty() {
+            self.global_hotkey = default_global_hotkey();
+        }
+        if self.pin_hotkey.trim().is_empty() {
+            self.pin_hotkey = default_pin_hotkey();
+        }
+
+        if !self.panel_top_inset.is_finite() || self.panel_top_inset < 0.0 {
+            self.panel_top_inset = default_panel_top_inset();
+        } else {
+            self.panel_top_inset = self.panel_top_inset.min(MAX_PANEL_TOP_INSET);
+        }
+
         self
     }
 
@@ -372,6 +455,17 @@ impl TerminalSettings {
         Self::default()
     }
 
+    /// Save settings to a JSON file.
+    pub fn save(&self, config_path: &PathBuf) -> std::io::Result<()> {
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let serialized = serde_json::to_string_pretty(self)
+            .map_err(|err| std::io::Error::other(format!("failed to serialize settings: {err}")))?;
+        std::fs::write(config_path, serialized)
+    }
+
     /// Get the config directory path
     pub fn config_dir() -> PathBuf {
         directories::ProjectDirs::from("com", "simple-term", "SimpleTerm")
@@ -388,8 +482,8 @@ impl TerminalSettings {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_font_fallbacks, default_font_family, Blinking, LineHeight, ShellConfig,
-        TerminalSettings,
+        default_font_fallbacks, default_font_family, Blinking, CursorShape, LineHeight,
+        ShellConfig, TerminalSettings, TerminalTheme,
     };
     use crate::Shell;
     use std::path::PathBuf;
@@ -425,6 +519,35 @@ mod tests {
     fn terminal_settings_default_uses_fallback_list() {
         let settings = TerminalSettings::default();
         assert!(!settings.font_fallbacks.is_empty());
+        assert_eq!(settings.theme, TerminalTheme::AtomOneDark);
+        assert_eq!(settings.global_hotkey, "command+F4");
+        assert_eq!(settings.pin_hotkey, "command+Backquote");
+    }
+
+    #[test]
+    fn default_cursor_style_uses_configured_shape_and_blinking_override() {
+        let settings = TerminalSettings {
+            cursor_shape: CursorShape::Bar,
+            blinking: Blinking::On,
+            ..TerminalSettings::default()
+        };
+
+        let style = settings.default_cursor_style();
+        assert_eq!(style.shape, super::AlacCursorShape::Beam);
+        assert!(style.blinking);
+    }
+
+    #[test]
+    fn terminal_controlled_blinking_defaults_to_non_blinking_style() {
+        let settings = TerminalSettings {
+            cursor_shape: CursorShape::Underline,
+            blinking: Blinking::TerminalControlled,
+            ..TerminalSettings::default()
+        };
+
+        let style = settings.default_cursor_style();
+        assert_eq!(style.shape, super::AlacCursorShape::Underline);
+        assert!(!style.blinking);
     }
 
     #[test]
@@ -471,7 +594,8 @@ mod tests {
             "font_size": 18.5,
             "font_family": "JetBrains Mono",
             "env": {"FOO": "BAR"},
-            "blinking": "off"
+            "blinking": "off",
+            "theme": "tokyo_night"
         }"#;
         std::fs::write(&path, json).expect("write test settings");
 
@@ -482,6 +606,7 @@ mod tests {
         assert_eq!(settings.font_family, "JetBrains Mono");
         assert_eq!(settings.env.get("FOO").map(String::as_str), Some("BAR"));
         assert_eq!(settings.blinking, Blinking::Off);
+        assert_eq!(settings.theme, TerminalTheme::TokyoNight);
     }
 
     #[test]
@@ -532,13 +657,30 @@ mod tests {
     }
 
     #[test]
+    fn load_sanitizes_empty_hotkeys_to_defaults() {
+        let path = unique_temp_file("invalid-hotkeys");
+        let json = r#"{
+            "global_hotkey": " ",
+            "pin_hotkey": ""
+        }"#;
+        std::fs::write(&path, json).expect("write test settings");
+
+        let settings = TerminalSettings::load(&path);
+        std::fs::remove_file(path).ok();
+
+        assert_eq!(settings.global_hotkey, "command+F4");
+        assert_eq!(settings.pin_hotkey, "command+Backquote");
+    }
+
+    #[test]
     fn load_clamps_extreme_font_line_height_and_window_size_values() {
         let path = unique_temp_file("extreme-values");
         let json = r#"{
             "font_size": 10000.0,
             "line_height": {"type": "custom", "value": 100.0},
             "default_width": 50000,
-            "default_height": 50000
+            "default_height": 50000,
+            "panel_top_inset": 1000.0
         }"#;
         std::fs::write(&path, json).expect("write test settings");
 
@@ -549,6 +691,7 @@ mod tests {
         assert_eq!(settings.line_height, LineHeight::Custom { value: 3.0 });
         assert_eq!(settings.default_width, 8192);
         assert_eq!(settings.default_height, 4320);
+        assert_eq!(settings.panel_top_inset, 64.0);
     }
 
     #[test]
@@ -557,6 +700,61 @@ mod tests {
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
             Some("settings.json")
+        );
+    }
+
+    #[test]
+    fn save_writes_json_that_round_trips_with_load() {
+        let path = unique_temp_file("save-roundtrip");
+        let settings = TerminalSettings {
+            font_size: 18.0,
+            font_family: "JetBrains Mono".to_string(),
+            ..TerminalSettings::default()
+        };
+
+        settings.save(&path).expect("save settings");
+        let loaded = TerminalSettings::load(&path);
+        std::fs::remove_file(path).ok();
+
+        assert_eq!(loaded.font_size, 18.0);
+        assert_eq!(loaded.font_family, "JetBrains Mono");
+    }
+
+    #[test]
+    fn save_creates_missing_parent_directories() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "simple-term-save-parent-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should move forward")
+                .as_nanos()
+        ));
+        path.push("nested");
+        path.push("settings.json");
+
+        let settings = TerminalSettings::default();
+        settings.save(&path).expect("save settings into nested dir");
+        assert!(path.exists(), "settings file should be created");
+
+        std::fs::remove_file(&path).ok();
+        if let Some(parent) = path.parent() {
+            std::fs::remove_dir_all(parent).ok();
+        }
+    }
+
+    #[test]
+    fn saved_settings_do_not_include_dock_mode_field() {
+        let path = unique_temp_file("save-no-dock-mode");
+        let settings = TerminalSettings::default();
+        settings.save(&path).expect("save settings");
+
+        let contents = std::fs::read_to_string(&path).expect("read saved settings");
+        std::fs::remove_file(path).ok();
+
+        assert!(
+            !contents.contains("\"dock_mode\""),
+            "dock_mode should not be serialized in settings.json"
         );
     }
 }

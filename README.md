@@ -74,6 +74,12 @@ On missing/invalid config, sane defaults are used.
   "font_size": 14,
   "font_family": "Menlo",
   "line_height": { "type": "comfortable" },
+  "dock_mode": "regular",
+  "theme": "atom_one_dark",
+  "global_hotkey": "command+F4",
+  "pin_hotkey": "command+Backquote",
+  "auto_hide_on_outside_click": true,
+  "panel_top_inset": 8,
   "default_width": 960,
   "default_height": 600,
   "max_scroll_history_lines": 10000,
@@ -84,6 +90,26 @@ On missing/invalid config, sane defaults are used.
   "path_hyperlink_timeout_ms": 500
 }
 ```
+
+Available theme presets: `atom_one_dark`, `gruvbox_dark`, `tokyo_night`, `catppuccin_mocha`, `nord`, `solarized_dark`.
+
+`atom_one_dark` is the Atom One Dark-inspired terminal palette.
+Backward compatibility: legacy `"theme": "atom_one_dark"` is still accepted.
+
+### Settings Drawer (V1)
+
+Use the top-right `⚙` button in the tab bar to open settings as an overlay popup. Width is responsive (up to 360px) so it remains usable on narrower windows.
+
+- Save model: runtime changes apply immediately and are persisted immediately to `settings.json`.
+- Close behavior: click `✕` in the header, click the backdrop, or press `Esc`.
+- Platform behavior: `dock_mode` is editable on macOS and shown as disabled with an explanation on non-macOS.
+
+V1 groups and controls:
+
+- `Appearance`: `theme`, `font_family`, `font_size`, `line_height`, `cursor_shape`, `blinking`
+- `Behavior`: `copy_on_select`, `keep_selection_on_copy` (enabled only when `copy_on_select=true`), `option_as_meta`, `scroll_multiplier`
+- `Window`: `dock_mode`
+- `Advanced`: V2 placeholder notes (`shell`, `working_directory`, `env`, hyperlink regex rules, hotkey recorder)
 
 ## Architecture at a glance
 

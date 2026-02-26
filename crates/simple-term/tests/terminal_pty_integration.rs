@@ -8,6 +8,7 @@ use simple_term::alacritty_terminal::event::WindowSize;
 use simple_term::alacritty_terminal::grid::Scroll;
 use simple_term::alacritty_terminal::term::cell::Flags;
 use simple_term::terminal::{Terminal, TerminalEvent};
+use simple_term::AlacCursorStyle;
 use simple_term::Dimensions;
 use simple_term::Shell;
 
@@ -35,6 +36,7 @@ fn spawn_terminal_script(script: &str, size: WindowSize, scrollback_lines: usize
         size,
         scrollback_lines,
         HashMap::new(),
+        AlacCursorStyle::default(),
     )
     .expect("failed to spawn terminal")
 }

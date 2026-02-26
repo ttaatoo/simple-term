@@ -28,5 +28,5 @@ This message is emitted by macOS Input Method Kit (IMK), not by `simple-term`.
 
 For `Ctrl+C` redraw responsiveness, rely on terminal perf logs and regression tests under:
 
-- `/Users/mt/Github/zed-terminal/crates/simple-term/tests/terminal_pty_integration.rs`
-- `/Users/mt/Github/zed-terminal/apps/simple-term/src/terminal_view.rs`
+- `/Users/mt/Github/simple-term/crates/simple-term/tests/terminal_pty_integration.rs`
+- `/Users/mt/Github/simple-term/apps/simple-term/src/terminal_view.rs`

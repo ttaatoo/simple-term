@@ -13,6 +13,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term};
 use alacritty_terminal::tty;
+use alacritty_terminal::vte::ansi::CursorStyle as AlacCursorStyle;
 
 use crate::Shell;
 
@@ -129,6 +130,7 @@ impl Terminal {
         window_size: WindowSize,
         scrollback_lines: usize,
         environment: HashMap<String, String>,
+        default_cursor_style: AlacCursorStyle,
     ) -> io::Result<Self> {
         let (event_sender, event_receiver) = smol::channel::bounded(256);
         let event_proxy = EventProxy {
@@ -138,6 +140,7 @@ impl Terminal {
         // Configure the terminal emulator
         let config = term::Config {
             scrolling_history: scrollback_lines.min(crate::config::MAX_SCROLL_HISTORY_LINES),
+            default_cursor_style,
             ..Default::default()
         };
 

@@ -5,7 +5,12 @@ This document defines the core runtime structure and the behavioral invariants t
 ## Runtime Architecture
 
 - `apps/simple-term/src/main.rs`
-  - Loads settings, constructs window options, and boots `TerminalView`.
+  - Loads settings and boots the app shell.
+  - On macOS, runs a unified app-shell controller:
+    - opens terminal window on startup
+    - installs menubar status-item integration (when enabled)
+    - routes menubar/global-hotkey commands through a single show/hide toggle path
+  - On other platforms, opens the standard terminal window directly.
 - `apps/simple-term/src/terminal_view.rs`
   - UI-facing layer responsible for input handling, terminal snapshotting, and painting.
   - Consumes backend events (`Wakeup`, `TitleChanged`, `Exit`) and triggers redraws/window title updates.
