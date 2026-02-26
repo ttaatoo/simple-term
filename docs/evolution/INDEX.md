@@ -351,3 +351,156 @@ Covers:
 - setting the show/hide shortcut default to `command+F4`
 - exposing settings-panel shortcut recording for `global_hotkey`
 - applying hotkey updates live via controller command routing and safe re-registration
+
+## 0038 macOS Show Terminal on Mouse Monitor
+
+File: `0038-2026-02-26-macos-show-terminal-on-mouse-monitor.md`
+
+Covers:
+- ensuring `show_terminal` resolves placement from current mouse monitor on every show request
+- applying monitor-aware move logic to existing-window reuse path before finalizing show handling
+- preserving controller-owned placement boundaries between `main.rs` and `macos.rs`
+
+## 0039 macOS Deferred Window Move to Avoid GPUI Re-entry
+
+File: `0039-2026-02-26-macos-deferred-window-move-to-avoid-gpui-reentry.md`
+
+Covers:
+- resolving `RefCell already borrowed` logs caused by synchronous native window frame moves inside GPUI update flow
+- deferring existing-window move/pin update via `App::defer`, avoiding in-update window activation, and deferring native frame move via main-queue dispatch to avoid in-stack GPUI re-entry
+- preserving monitor-follow placement behavior without recreating terminal windows
+
+## 0040 macOS Per-Monitor Window Position Persistence
+
+File: `0040-2026-02-26-macos-per-monitor-window-position-persistence.md`
+
+Covers:
+- persisting last known window origin per monitor key in `settings.json`
+- capturing monitor+position during hide and reapplying on next show for that monitor
+- clamping restored positions to visible monitor bounds with centered fallback when no persisted position exists
+
+## 0041 macOS Per-Monitor Window Size Persistence
+
+File: `0041-2026-02-26-macos-per-monitor-window-size-persistence.md`
+
+Covers:
+- extending per-monitor placement persistence with optional `width`/`height`
+- capturing position and size together on hide and restoring both on next show
+- preserving backward compatibility for older settings by treating saved size as optional and clamping restored geometry to visible bounds
+
+## 0042 macOS Existing-Window Frame Restore
+
+File: `0042-2026-02-26-macos-existing-window-frame-restore.md`
+
+Covers:
+- fixing existing-window show path to apply full frame (position + size) rather than top-left-only movement
+- preserving deferred main-queue native frame mutation for GPUI borrow safety
+- preventing cross-monitor size bleed when reusing a hidden window
+
+## 0043 macOS Cross-Monitor Popup Latency Reduction
+
+File: `0043-2026-02-26-macos-cross-monitor-popup-latency-reduction.md`
+
+Covers:
+- reducing extra deferred-hop latency in existing-window reopen path
+- applying monitor placement/pin update inline for reused windows while keeping deferred native frame mutation
+- activating the app after frame scheduling so quick monitor switches feel immediate
+
+## 0044 macOS Fast-Toggle Latency Guardrails
+
+File: `0044-2026-02-26-macos-fast-toggle-latency-guardrails.md`
+
+Covers:
+- skipping no-op native frame updates when existing-window frame already matches target
+- using tolerant placement comparisons to avoid redundant settings writes on hide
+- preserving fast same-monitor toggle behavior without breaking per-monitor restore correctness
+
+## 0045 Tab-Bar Pin Indicator and Controller Sync
+
+File: `0045-2026-02-26-tabbar-pin-indicator-and-controller-sync.md`
+
+Covers:
+- adding tab-bar pin state indicator (`📌`/`○`) as explicit pinned-status affordance
+- synchronizing controller-owned pinned state into `TerminalView` across existing/new window paths
+- routing indicator clicks through controller command flow to preserve pin-state ownership
+
+## 0046 macOS Hidden-Window Frame Apply Ordering
+
+File: `0046-2026-02-26-macos-hidden-window-frame-apply-ordering.md`
+
+Covers:
+- fixing cross-monitor reopen flash by applying hidden-window frame updates before activation visibility
+- keeping deferred main-queue frame mutation only for visible windows to preserve re-entry safety
+- clarifying hidden-vs-visible frame-apply strategy as a runtime invariant
+
+## 0047 macOS Cross-Monitor Activation Ordering Without Re-entry
+
+File: `0047-2026-02-26-macos-cross-monitor-activation-ordering-without-reentry.md`
+
+Covers:
+- eliminating `RefCell already borrowed` re-entry by keeping frame mutation deferred for hidden-window cross-monitor reopen
+- moving hidden-window activation into the same native deferred callback after frame apply
+- making activation ownership explicit between controller and native callback paths
+
+## 0048 Local macOS Packaging Entrypoint with Icon Contract
+
+File: `0048-2026-02-26-local-macos-packaging-entrypoint-with-icon-contract.md`
+
+Covers:
+- adding a one-command local packaging entrypoint (`make package-macos-local`) for release-like app bundle assembly
+- mirroring icon contract requirements (`CFBundleIconFile` + `SimpleTerm.icns` copy into `Contents/Resources/`) in local packaging path
+- reducing false icon-regression reports caused by validating raw release binaries instead of packaged `.app` bundles
+
+## 0049 macOS Toggle Terminal Focus Restoration
+
+File: `0049-2026-02-26-macos-toggle-terminal-focus-restoration.md`
+
+Covers:
+- restoring explicit terminal view focus on show/toggle paths so `Cmd+F4` reopen accepts immediate typing
+- preserving existing activation ownership split without reintroducing window-level activation in borrowed update paths
+- documenting focus restoration as a show-path invariant alongside existing activation-ordering guardrails
+
+## 0050 Home `~/.simple-term` Settings Source and Bootstrap
+
+File: `0050-2026-02-26-home-dot-simple-term-settings-source-and-bootstrap.md`
+
+Covers:
+- standardizing persisted settings path to `~/.simple-term/settings.json`
+- creating missing config directory/file on startup while preserving existing user files
+- keeping UI persistence and direct JSON editing on one shared settings source
+
+## 0051 Tab and Settings Spacing Polish
+
+File: `0051-2026-02-26-tab-and-settings-spacing-polish.md`
+
+Covers:
+- spacing rhythm polish for tab strip and settings drawer while keeping `TAB_BAR_HEIGHT_PX = 40.0`
+- cleaner visual separators via subtle border contrast reduction without behavior changes
+- safe-change guardrails for compact-density preservation and viewport regression checks
+
+## 0052 Terminal Content Card Container Spacing
+
+File: `0052-2026-02-26-terminal-content-card-container-spacing.md`
+
+Covers:
+- resolving edge-clinging terminal content with container-level spacing in `content_row`
+- introducing a rounded, subtly bordered terminal frame without changing canvas coordinate logic
+- guardrails for preserving interaction behavior while applying visual polish
+
+## 0053 Pin Shortcut Focus Scope and Cursor Blink Default
+
+File: `0053-2026-02-26-pin-shortcut-focus-scope-and-cursor-blink-default.md`
+
+Covers:
+- enforcing `pin_hotkey` as focused-window scope instead of global hotkey scope
+- preventing hidden-window popup side effects from `Cmd+Backquote` pin toggles
+- restoring blinking-by-default behavior for `blinking = "terminal"` cursor mode
+
+## 0054 Cmd+W Last Tab Force-Hide Even When Pinned
+
+File: `0054-2026-02-26-cmdw-last-tab-force-hide-even-when-pinned.md`
+
+Covers:
+- introducing explicit `ForceHideTerminal` command for user-initiated last-tab close
+- preserving pinned protection for passive hide paths while allowing `Cmd+W` hide on the last tab
+- keeping hide-policy ownership centralized in app-shell controller logic

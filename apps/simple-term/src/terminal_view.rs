@@ -57,6 +57,7 @@ const TAB_ITEM_HEIGHT_PX: f32 = 28.0;
 const TAB_ITEM_INDICATOR_HEIGHT_PX: f32 = 3.0;
 const TAB_ITEM_INDICATOR_BOTTOM_GAP_PX: f32 = 2.0;
 const TAB_CLOSE_BUTTON_SIZE_PX: f32 = 20.0;
+const PIN_INDICATOR_BUTTON_WIDTH_PX: f32 = 30.0;
 const SETTINGS_BUTTON_WIDTH_PX: f32 = 30.0;
 const FIND_PANEL_MAX_WIDTH_PX: f32 = 760.0;
 const FIND_PANEL_MIN_WIDTH_PX: f32 = 240.0;
@@ -70,7 +71,7 @@ const SETTINGS_DRAWER_SCROLLBAR_WIDTH_PX: f32 = 8.0;
 const SETTINGS_DRAWER_SCROLLBAR_TRACK_WIDTH_PX: f32 = 3.0;
 const SETTINGS_DRAWER_SCROLLBAR_TRACK_INSET_PX: f32 = 2.0;
 const SETTINGS_DRAWER_SCROLLBAR_MIN_THUMB_HEIGHT_PX: f32 = 24.0;
-const SETTINGS_DRAWER_SCROLL_CONTENT_PADDING_RIGHT_PX: f32 = 12.0;
+const SETTINGS_DRAWER_SCROLL_CONTENT_PADDING_RIGHT_PX: f32 = 14.0;
 const SETTINGS_OVERLAY_BACKDROP_ALPHA: f32 = 0.28;
 const SETTINGS_NUMERIC_BUTTON_WIDTH_PX: f32 = 24.0;
 const SETTINGS_CONTROL_HEIGHT_PX: f32 = 24.0;
@@ -311,7 +312,9 @@ pub struct TerminalView {
     active_tab_id: u64,
     hovered_tab_id: Option<u64>,
     next_tab_id: u64,
+    pinned: bool,
     on_hide_terminal_requested: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_toggle_pin_requested: Option<Arc<dyn Fn() + Send + Sync>>,
     on_hotkeys_updated: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
     regex_searches: RegexSearches,
     settings: TerminalSettings,
@@ -540,6 +543,10 @@ fn update_action_for_terminal_event(event: TerminalEvent) -> ViewUpdateAction {
 }
 
 impl TerminalView {
+    pub(crate) fn focus_terminal(&self, window: &mut Window) {
+        self.focus_handle.focus(window);
+    }
+
     fn sanitize_tab_title(raw: &str) -> String {
         let cleaned: String = raw
             .chars()
@@ -624,6 +631,21 @@ impl TerminalView {
         } else {
             cx.hide();
         }
+    }
+
+    fn request_toggle_pin(&self) {
+        if let Some(on_toggle_pin_requested) = self.on_toggle_pin_requested.as_ref() {
+            on_toggle_pin_requested();
+        }
+    }
+
+    pub(crate) fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
+        if self.pinned == pinned {
+            return;
+        }
+
+        self.pinned = pinned;
+        cx.notify();
     }
 
     fn terminal_grid_for_viewport(viewport: Size<Pixels>, cell_size: Size<Pixels>) -> Size<u16> {
@@ -747,6 +769,14 @@ impl TerminalView {
 
     fn toggled_settings_panel_open(is_open: bool) -> bool {
         !is_open
+    }
+
+    fn pin_indicator_symbol(pinned: bool) -> &'static str {
+        if pinned {
+            "📌"
+        } else {
+            "○"
+        }
     }
 
     fn find_panel_width_for_viewport(viewport_width: Pixels) -> Pixels {
@@ -898,6 +928,20 @@ impl TerminalView {
 
         let candidate = parts.join("+");
         candidate.parse::<GlobalHotKey>().ok().map(|_| candidate)
+    }
+
+    fn pin_hotkey_matches_keystroke(pin_hotkey: &str, keystroke: &Keystroke) -> bool {
+        let Some(candidate) = Self::global_hotkey_from_keystroke(keystroke) else {
+            return false;
+        };
+
+        match (
+            candidate.parse::<GlobalHotKey>(),
+            pin_hotkey.parse::<GlobalHotKey>(),
+        ) {
+            (Ok(candidate), Ok(configured)) => candidate == configured,
+            _ => false,
+        }
     }
 
     fn persist_settings(&self) {
@@ -1451,7 +1495,10 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
         settings: TerminalSettings,
+        pinned: bool,
+        on_hide_terminal_requested: Option<Arc<dyn Fn() + Send + Sync>>,
         on_window_deactivated: Option<Arc<dyn Fn() + Send + Sync>>,
+        on_toggle_pin_requested: Option<Arc<dyn Fn() + Send + Sync>>,
         on_hotkeys_updated: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
     ) -> Self {
         let (font, font_size, cell_size) = Self::resolve_font_and_cell_size(window, &settings);
@@ -1472,7 +1519,6 @@ impl TerminalView {
             cx.observe_window_bounds(window, |this: &mut Self, window, cx| {
                 this.handle_resize(window, cx);
             });
-        let on_hide_terminal_requested = on_window_deactivated.clone();
         let auto_hide_on_outside_click = settings.auto_hide_on_outside_click;
         let activation_subscription =
             cx.observe_window_activation(window, move |this, window, cx| {
@@ -1501,7 +1547,9 @@ impl TerminalView {
             active_tab_id: 1,
             hovered_tab_id: None,
             next_tab_id: 2,
+            pinned,
             on_hide_terminal_requested,
+            on_toggle_pin_requested,
             on_hotkeys_updated,
             regex_searches,
             settings,
@@ -1957,6 +2005,15 @@ impl TerminalView {
         true
     }
 
+    fn handle_pin_keybinding(&mut self, event: &KeyDownEvent) -> bool {
+        if !Self::pin_hotkey_matches_keystroke(&self.settings.pin_hotkey, &event.keystroke) {
+            return false;
+        }
+
+        self.request_toggle_pin();
+        true
+    }
+
     fn handle_tab_keybinding(
         &mut self,
         event: &KeyDownEvent,
@@ -2352,6 +2409,13 @@ impl Render for TerminalView {
             )
         });
         let settings_panel_open = self.settings_panel_open;
+        let pinned = self.pinned;
+        let pin_indicator_symbol = Self::pin_indicator_symbol(pinned);
+        let pin_indicator_color = if pinned {
+            tab_brand_purple(1.0)
+        } else {
+            hsla(0.0, 0.0, 1.0, 0.52)
+        };
         let active_font_family_display = self.settings.font_family.clone();
         let font_size_display = format!("{:.1}", self.settings.font_size);
         let line_height_mode = Self::line_height_mode(&self.settings.line_height);
@@ -2676,6 +2740,10 @@ impl Render for TerminalView {
                     return;
                 }
 
+                if this.handle_pin_keybinding(event) {
+                    return;
+                }
+
                 let mode = {
                     let term = this.active_terminal().term.lock();
                     *term.mode()
@@ -2858,7 +2926,7 @@ impl Render for TerminalView {
             .items_center()
             .bg(rgb(active_theme_palette.ui_bg))
             .border_b_1()
-            .border_color(hsla(0.0, 0.0, 1.0, 0.06))
+            .border_color(hsla(0.0, 0.0, 1.0, 0.04))
             .child(
                 div()
                     .w(px(TAB_BAR_LEFT_DRAG_WIDTH_PX))
@@ -2866,7 +2934,7 @@ impl Render for TerminalView {
                     .h_full()
                     .window_control_area(WindowControlArea::Drag)
                     .border_r_1()
-                    .border_color(hsla(0.0, 0.0, 1.0, 0.06)),
+                    .border_color(hsla(0.0, 0.0, 1.0, 0.04)),
             )
             .child(
                 div()
@@ -2885,7 +2953,7 @@ impl Render for TerminalView {
                             .items_end()
                             .justify_start()
                             .gap_2()
-                            .px_3()
+                            .px_4()
                             .overflow_x_scroll()
                             .scrollbar_width(px(0.0))
                             .children(tabs_for_render.into_iter().map(
@@ -2904,13 +2972,13 @@ impl Render for TerminalView {
                                             div()
                                                 .id(("tab-item", tab_id))
                                                 .h(px(TAB_ITEM_HEIGHT_PX))
-                                                .px_3()
+                                                .px_2()
                                                 .flex()
                                                 .flex_row()
                                                 .items_center()
                                                 .when(!is_last, |this| {
                                                     this.border_r_1()
-                                                        .border_color(hsla(0.0, 0.0, 1.0, 0.06))
+                                                        .border_color(hsla(0.0, 0.0, 1.0, 0.04))
                                                 })
                                                 .cursor_pointer()
                                                 .bg(hsla(0.0, 0.0, 1.0, 0.0))
@@ -3032,10 +3100,10 @@ impl Render for TerminalView {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_2()
+                    .gap_3()
                     .px_3()
                     .border_l_1()
-                    .border_color(hsla(0.0, 0.0, 1.0, 0.06))
+                    .border_color(hsla(0.0, 0.0, 1.0, 0.04))
                     .when(find_panel_state.is_some(), |this| {
                         let (query_display, is_placeholder, count_label, has_match) =
                             find_panel_state
@@ -3108,7 +3176,7 @@ impl Render for TerminalView {
                                             hsla(0.0, 0.0, 1.0, 0.26)
                                         })
                                         .cursor_pointer()
-                                        .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                        .hover(|style| style.bg(tab_brand_purple(0.18)))
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
@@ -3132,7 +3200,7 @@ impl Render for TerminalView {
                                             hsla(0.0, 0.0, 1.0, 0.26)
                                         })
                                         .cursor_pointer()
-                                        .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                        .hover(|style| style.bg(tab_brand_purple(0.18)))
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
@@ -3152,7 +3220,7 @@ impl Render for TerminalView {
                                         .text_sm()
                                         .text_color(hsla(0.0, 0.0, 1.0, 0.68))
                                         .cursor_pointer()
-                                        .hover(|style| style.bg(tab_brand_purple(0.22)))
+                                        .hover(|style| style.bg(tab_brand_purple(0.18)))
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
@@ -3182,7 +3250,7 @@ impl Render for TerminalView {
                             .text_center()
                             .hover(|style| {
                                 style
-                                    .bg(tab_brand_purple(0.22))
+                                    .bg(tab_brand_purple(0.18))
                                     .border_color(tab_brand_purple(0.9))
                                     .text_color(hsla(0.0, 0.0, 1.0, 0.92))
                             })
@@ -3217,7 +3285,7 @@ impl Render for TerminalView {
                             .when(has_multiple_tabs, |this| {
                                 this.cursor_pointer().hover(|style| {
                                     style
-                                        .bg(tab_brand_purple(0.22))
+                                        .bg(tab_brand_purple(0.18))
                                         .border_color(tab_brand_purple(0.9))
                                         .text_color(hsla(0.0, 0.0, 1.0, 0.92))
                                 })
@@ -3236,6 +3304,39 @@ impl Render for TerminalView {
                     .child(
                         div()
                             .h(px(TAB_ITEM_HEIGHT_PX))
+                            .w(px(PIN_INDICATOR_BUTTON_WIDTH_PX))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .bg(hsla(0.0, 0.0, 1.0, 0.0))
+                            .border_1()
+                            .border_color(if pinned {
+                                tab_brand_purple(0.8)
+                            } else {
+                                hsla(0.0, 0.0, 1.0, 0.12)
+                            })
+                            .text_sm()
+                            .text_color(pin_indicator_color)
+                            .cursor_pointer()
+                            .text_center()
+                            .hover(|style| {
+                                style
+                                    .bg(tab_brand_purple(0.18))
+                                    .border_color(tab_brand_purple(0.9))
+                                    .text_color(hsla(0.0, 0.0, 1.0, 0.92))
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event: &MouseDownEvent, _window, _cx| {
+                                    this.request_toggle_pin();
+                                }),
+                            )
+                            .child(pin_indicator_symbol),
+                    )
+                    .child(
+                        div()
+                            .h(px(TAB_ITEM_HEIGHT_PX))
                             .w(px(SETTINGS_BUTTON_WIDTH_PX))
                             .flex()
                             .items_center()
@@ -3250,7 +3351,7 @@ impl Render for TerminalView {
                             .text_center()
                             .hover(|style| {
                                 style
-                                    .bg(tab_brand_purple(0.22))
+                                    .bg(tab_brand_purple(0.18))
                                     .border_color(tab_brand_purple(0.9))
                                     .text_color(hsla(0.0, 0.0, 1.0, 0.92))
                             })
@@ -3289,7 +3390,7 @@ impl Render for TerminalView {
             .rounded_lg()
             .bg(hsla(0.0, 0.0, 0.0, 0.82))
             .border_1()
-            .border_color(hsla(0.0, 0.0, 1.0, 0.08))
+            .border_color(hsla(0.0, 0.0, 1.0, 0.07))
             .child(
                 div()
                     .h(px(SETTINGS_DRAWER_HEADER_HEIGHT_PX))
@@ -3299,7 +3400,7 @@ impl Render for TerminalView {
                     .items_center()
                     .justify_between()
                     .border_b_1()
-                    .border_color(hsla(0.0, 0.0, 1.0, 0.08))
+                    .border_color(hsla(0.0, 0.0, 1.0, 0.07))
                     .child(
                         div()
                             .text_sm()
@@ -3338,7 +3439,7 @@ impl Render for TerminalView {
                     .pr(px(SETTINGS_DRAWER_SCROLL_CONTENT_PADDING_RIGHT_PX))
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap_4()
                     .overflow_y_scroll()
                     .scrollbar_width(Self::settings_drawer_scrollbar_width())
                     .track_scroll(&self.settings_drawer_scroll_handle)
@@ -3350,7 +3451,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -3421,7 +3522,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -3492,7 +3593,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -3562,7 +3663,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -3766,7 +3867,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -3883,7 +3984,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -3980,7 +4081,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -4048,7 +4149,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -4132,7 +4233,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -4200,7 +4301,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -4276,7 +4377,7 @@ impl Render for TerminalView {
                     )
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -4349,7 +4450,7 @@ impl Render for TerminalView {
                     .child(div().text_xs().text_color(hsla(0.0, 0.0, 1.0, 0.46)).child("Advanced"))
                     .child(
                         div()
-                            .p_2()
+                            .p_3()
                             .rounded_sm()
                             .border_1()
                             .border_color(hsla(0.0, 0.0, 1.0, 0.12))
@@ -4361,12 +4462,12 @@ impl Render for TerminalView {
                             ))
                             .child(
                                 div()
-                                    .mt_1()
-                                    .child("Advanced options are available in settings.json"),
+                                    .mt_2()
+                                    .child("Advanced options are available in ~/.simple-term/settings.json"),
                             )
                             .child(
                                 div()
-                                    .mt_1()
+                                    .mt_2()
                                     .text_color(hsla(0.0, 0.0, 1.0, 0.56))
                                     .child(
                                         "Includes shell, working directory, env, path regexes, and pin hotkey.",
@@ -4403,6 +4504,8 @@ impl Render for TerminalView {
             .w_full()
             .flex()
             .flex_row()
+            .px_2()
+            .py_1()
             .child(terminal_surface);
 
         let mut terminal_root = div()
@@ -5278,6 +5381,12 @@ mod tests {
     }
 
     #[test]
+    fn pin_indicator_symbol_maps_pinned_and_unpinned_states() {
+        assert_eq!(TerminalView::pin_indicator_symbol(true), "📌");
+        assert_eq!(TerminalView::pin_indicator_symbol(false), "○");
+    }
+
+    #[test]
     fn blend_rgb_interpolates_channels() {
         let base = AlacRgb { r: 0, g: 0, b: 0 };
         let overlay = AlacRgb {
@@ -5385,6 +5494,35 @@ mod tests {
         };
 
         assert_eq!(TerminalView::global_hotkey_from_keystroke(&keystroke), None);
+    }
+
+    #[test]
+    fn pin_hotkey_matches_only_configured_combination() {
+        let matched = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "backquote".to_string(),
+            key_char: None,
+        };
+        let mismatched = Keystroke {
+            modifiers: Modifiers {
+                platform: true,
+                ..Modifiers::default()
+            },
+            key: "f4".to_string(),
+            key_char: None,
+        };
+
+        assert!(TerminalView::pin_hotkey_matches_keystroke(
+            "command+Backquote",
+            &matched
+        ));
+        assert!(!TerminalView::pin_hotkey_matches_keystroke(
+            "command+Backquote",
+            &mismatched
+        ));
     }
 
     #[test]

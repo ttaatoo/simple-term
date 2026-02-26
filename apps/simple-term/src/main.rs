@@ -30,6 +30,7 @@ pub(crate) enum AppCommand {
     ToggleTerminal,
     TogglePinned,
     HideTerminal,
+    ForceHideTerminal,
     UpdateHotkeys {
         global_hotkey: String,
         pin_hotkey: String,
@@ -39,7 +40,7 @@ pub(crate) enum AppCommand {
 fn main() {
     env_logger::init();
     Application::new().run(|cx| {
-        let settings = TerminalSettings::load(&TerminalSettings::config_path());
+        let settings = TerminalSettings::load_or_create(&TerminalSettings::config_path());
 
         #[cfg(target_os = "macos")]
         {
@@ -68,7 +69,7 @@ fn open_standard_window(cx: &mut App, settings: TerminalSettings) -> WindowHandl
 
     cx.open_window(options, move |window, cx| {
         let settings = settings.clone();
-        cx.new(move |cx| TerminalView::new(window, cx, settings, None, None))
+        cx.new(move |cx| TerminalView::new(window, cx, settings, false, None, None, None, None))
     })
     .expect("Failed to open window")
 }
@@ -171,12 +172,6 @@ impl AppShellController {
             Self::default_toggle_hotkey(),
             "global_hotkey",
         );
-        let pin_hotkey = Self::parse_hotkey_or_fallback(
-            &self.settings.pin_hotkey,
-            Self::default_pin_hotkey(),
-            "pin_hotkey",
-        );
-
         let toggle_hotkey_id = match manager.register(toggle_hotkey) {
             Ok(_) => Some(toggle_hotkey.id()),
             Err(err) => {
@@ -188,24 +183,7 @@ impl AppShellController {
             }
         };
 
-        let pin_hotkey_id = if toggle_hotkey.id() == pin_hotkey.id() {
-            log::warn!(
-                "pin_hotkey '{}' conflicts with global_hotkey '{}'; pin shortcut disabled",
-                self.settings.pin_hotkey,
-                self.settings.global_hotkey
-            );
-            None
-        } else {
-            match manager.register(pin_hotkey) {
-                Ok(_) => Some(pin_hotkey.id()),
-                Err(err) => {
-                    log::warn!("failed to register pin_hotkey '{}': {err}", pin_hotkey);
-                    None
-                }
-            }
-        };
-
-        if toggle_hotkey_id.is_none() && pin_hotkey_id.is_none() {
+        if toggle_hotkey_id.is_none() {
             return;
         }
 
@@ -221,11 +199,6 @@ impl AppShellController {
 
                     if Some(event.id) == toggle_hotkey_id {
                         let _ = command_tx.try_send(AppCommand::ToggleTerminal);
-                        continue;
-                    }
-
-                    if Some(event.id) == pin_hotkey_id {
-                        let _ = command_tx.try_send(AppCommand::TogglePinned);
                     }
                 }
             });
@@ -235,10 +208,6 @@ impl AppShellController {
 
     fn default_toggle_hotkey() -> HotKey {
         HotKey::new(Some(Modifiers::SUPER), Code::F4)
-    }
-
-    fn default_pin_hotkey() -> HotKey {
-        HotKey::new(Some(Modifiers::SUPER), Code::Backquote)
     }
 
     fn parse_hotkey_or_fallback(configured_hotkey: &str, fallback: HotKey, label: &str) -> HotKey {
@@ -297,6 +266,7 @@ impl AppShellController {
             }
             AppCommand::TogglePinned => self.toggle_terminal_pin(cx),
             AppCommand::HideTerminal => self.hide_terminal(cx),
+            AppCommand::ForceHideTerminal => self.force_hide_terminal(cx),
             AppCommand::UpdateHotkeys {
                 global_hotkey,
                 pin_hotkey,
@@ -310,15 +280,14 @@ impl AppShellController {
 
     fn toggle_terminal_pin(&mut self, cx: &mut App) {
         self.pinned = !self.pinned;
-        if self.pinned {
-            self.show_terminal(cx);
-        }
 
         if let Some(window_handle) = self.terminal_window {
             let pinned = self.pinned;
-            let _ = window_handle.update(cx, |_, window, _| {
+            let should_activate = Self::should_activate_window_after_pin_toggle(pinned, self.visible);
+            let _ = window_handle.update(cx, |view, window, cx| {
+                view.set_pinned(pinned, cx);
                 macos::set_window_pinned(window, pinned);
-                if pinned {
+                if should_activate {
                     window.activate_window();
                 }
             });
@@ -326,18 +295,36 @@ impl AppShellController {
     }
 
     fn show_terminal(&mut self, cx: &mut App) {
-        cx.activate(true);
+        let placement = macos::resolve_panel_placement(
+            self.settings.default_width as f32,
+            self.settings.default_height as f32,
+            self.settings.panel_top_inset,
+            &self.settings.monitor_window_positions,
+        );
 
         if let Some(window_handle) = self.terminal_window {
-            let pinned = self.pinned;
+            const FRAME_RESTORE_TOLERANCE: f32 = 0.5;
+            let pinned_for_existing_window = self.pinned;
+            let mut activation_deferred_to_native = false;
             let updated = window_handle
-                .update(cx, |_, window, _| {
-                    macos::set_window_pinned(window, pinned);
-                    window.activate_window();
+                .update(cx, |view, window, cx| {
+                    view.set_pinned(pinned_for_existing_window, cx);
+                    if macos::window_needs_frame_update(window, &placement, FRAME_RESTORE_TOLERANCE)
+                    {
+                        activation_deferred_to_native = matches!(
+                            macos::move_window_to(window, &placement, true),
+                            macos::MoveWindowResult::ActivationDeferredToNative
+                        );
+                    }
+                    macos::set_window_pinned(window, pinned_for_existing_window);
+                    view.focus_terminal(window);
                 })
                 .is_ok();
 
             if updated {
+                if !activation_deferred_to_native {
+                    cx.activate(true);
+                }
                 self.visible = true;
                 return;
             }
@@ -345,11 +332,9 @@ impl AppShellController {
             self.terminal_window = None;
         }
 
-        let placement = macos::resolve_panel_placement(
-            self.settings.default_width as f32,
-            self.settings.default_height as f32,
-            self.settings.panel_top_inset,
-        );
+        // Avoid window-level activation inside `window_handle.update` to prevent
+        // re-entrant GPUI resize/move callbacks while App state is mutably borrowed.
+        cx.activate(true);
 
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(placement.bounds)),
@@ -369,6 +354,10 @@ impl AppShellController {
 
         let settings = self.settings.clone();
         let command_tx = self.command_tx.clone();
+        let on_hide_terminal_requested = Some(Arc::new(move || {
+            let _ = command_tx.try_send(AppCommand::ForceHideTerminal);
+        }) as Arc<dyn Fn() + Send + Sync>);
+        let command_tx = self.command_tx.clone();
         let on_window_deactivated = Some(Arc::new(move || {
             let _ = command_tx.try_send(AppCommand::HideTerminal);
         }) as Arc<dyn Fn() + Send + Sync>);
@@ -379,27 +368,39 @@ impl AppShellController {
                 pin_hotkey,
             });
         }) as Arc<dyn Fn(String, String) + Send + Sync>);
+        let command_tx = self.command_tx.clone();
+        let on_toggle_pin_requested = Some(Arc::new(move || {
+            let _ = command_tx.try_send(AppCommand::TogglePinned);
+        }) as Arc<dyn Fn() + Send + Sync>);
+        let pinned_for_new_view = self.pinned;
 
         match cx.open_window(options, move |window, cx| {
             let settings = settings.clone();
+            let on_hide_terminal_requested = on_hide_terminal_requested.clone();
             let on_window_deactivated = on_window_deactivated.clone();
             let on_hotkeys_updated = on_hotkeys_updated.clone();
+            let on_toggle_pin_requested = on_toggle_pin_requested.clone();
             cx.new(move |cx| {
                 TerminalView::new(
                     window,
                     cx,
                     settings,
+                    pinned_for_new_view,
+                    on_hide_terminal_requested,
                     on_window_deactivated,
+                    on_toggle_pin_requested,
                     on_hotkeys_updated,
                 )
             })
         }) {
             Ok(window_handle) => {
                 let pinned = self.pinned;
-                let _ = window_handle.update(cx, |_, window, _| {
-                    macos::move_window_to(window, &placement);
+                let placement_for_new_window = placement.clone();
+                let _ = window_handle.update(cx, |view, window, cx| {
+                    view.set_pinned(pinned, cx);
+                    let _ = macos::move_window_to(window, &placement_for_new_window, false);
                     macos::set_window_pinned(window, pinned);
-                    window.activate_window();
+                    view.focus_terminal(window);
                 });
                 self.terminal_window = Some(window_handle);
                 self.visible = true;
@@ -412,24 +413,79 @@ impl AppShellController {
     }
 
     fn hide_terminal(&mut self, cx: &mut App) {
+        self.hide_terminal_with_policy(cx, false);
+    }
+
+    fn force_hide_terminal(&mut self, cx: &mut App) {
+        self.hide_terminal_with_policy(cx, true);
+    }
+
+    fn hide_terminal_with_policy(&mut self, cx: &mut App, force: bool) {
         if !Self::should_process_hide_terminal_request(
             self.visible,
             self.terminal_window.is_some(),
             self.pinned,
+            force,
         ) {
             return;
         }
 
+        self.capture_and_persist_window_placement(cx);
         cx.hide();
         self.visible = false;
+    }
+
+    fn capture_and_persist_window_placement(&mut self, cx: &mut App) {
+        let Some(window_handle) = self.terminal_window else {
+            return;
+        };
+
+        let mut captured = None;
+        let _ = window_handle.update(cx, |_, window, _| {
+            captured = macos::capture_window_monitor_position(window);
+        });
+
+        let Some((monitor_key, placement)) = captured else {
+            return;
+        };
+
+        let changed = self
+            .settings
+            .monitor_window_positions
+            .get(&monitor_key)
+            .map(|saved| !saved.approximately_equals(&placement, 0.5))
+            .unwrap_or(true);
+        if !changed {
+            return;
+        }
+
+        self.settings
+            .monitor_window_positions
+            .insert(monitor_key, placement);
+        self.persist_settings();
+    }
+
+    fn persist_settings(&self) {
+        let config_path = TerminalSettings::config_path();
+        if let Err(err) = self.settings.save(&config_path) {
+            log::warn!(
+                "failed to save settings to {}: {err}",
+                config_path.display()
+            );
+        }
     }
 
     fn should_process_hide_terminal_request(
         visible: bool,
         has_window_handle: bool,
         pinned: bool,
+        force: bool,
     ) -> bool {
-        !pinned && (visible || has_window_handle)
+        (force || !pinned) && (visible || has_window_handle)
+    }
+
+    fn should_activate_window_after_pin_toggle(pinned: bool, visible: bool) -> bool {
+        pinned && visible
     }
 }
 
@@ -475,13 +531,29 @@ mod tests {
     #[test]
     fn hide_terminal_request_is_processed_when_visible_flag_is_false() {
         assert!(AppShellController::should_process_hide_terminal_request(
-            false, true, false
+            false, true, false, false
         ));
         assert!(!AppShellController::should_process_hide_terminal_request(
-            false, false, false
+            false, false, false, false
         ));
         assert!(!AppShellController::should_process_hide_terminal_request(
-            true, true, true
+            true, true, true, false
+        ));
+        assert!(AppShellController::should_process_hide_terminal_request(
+            true, true, true, true
+        ));
+    }
+
+    #[test]
+    fn pin_toggle_activation_requires_visible_window() {
+        assert!(AppShellController::should_activate_window_after_pin_toggle(
+            true, true
+        ));
+        assert!(!AppShellController::should_activate_window_after_pin_toggle(
+            true, false
+        ));
+        assert!(!AppShellController::should_activate_window_after_pin_toggle(
+            false, true
         ));
     }
 
